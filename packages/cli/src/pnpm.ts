@@ -99,7 +99,8 @@ export function installCommand(
   lockfileOnly: boolean
 ): { cmd: string; args: string[]; cwd: string } | null {
   if (!isAbsolute(dir)) throw new Error(`installCommand needs an absolute directory, got: ${dir}`);
-  const extra = lockfileOnly ? ['--lockfile-only'] : [];
+  // The bundled lockfile always needs updating, and pnpm freezes it by default when CI is set.
+  const extra = ['--no-frozen-lockfile', ...(lockfileOnly ? ['--lockfile-only'] : [])];
   if (status.kind === 'ok') return { cmd: 'pnpm', args: ['install', ...extra], cwd: dir };
   if (status.kind === 'old') return null;
   return {

@@ -143,7 +143,7 @@ describe('run', () => {
       'git rev-parse --is-inside-work-tree',
       'git init -q -b main',
       'pnpm --version',
-      'pnpm install',
+      'pnpm install --no-frozen-lockfile',
       'git init -q -b main',
       'git add -A',
       'git config user.name',
@@ -200,7 +200,7 @@ describe('run', () => {
     const result = await run(plan(), ui, deps({ exec }));
     expect(result).toMatchObject({ installed: false, git: 'committed' });
     expect(result.pnpm).toEqual({ kind: 'old', version: '9.15.9' });
-    expect(log).not.toContain('pnpm install');
+    expect(log.some((line) => line.startsWith('pnpm install'))).toBe(false);
     expect(log.some((line) => line.startsWith('git commit'))).toBe(true);
     expect(ui.calls).toContainEqual(
       expect.stringMatching(/^fail: pnpm 9\.15\.9 is too old for this project \| /)
@@ -226,7 +226,7 @@ describe('run', () => {
   it('only updates the lockfile with install off', async () => {
     const ui = recordingUi();
     const result = await run(plan({ install: false }), ui, deps());
-    expect(log).toContain('pnpm install --lockfile-only');
+    expect(log).toContain('pnpm install --no-frozen-lockfile --lockfile-only');
     expect(result.installed).toBe(false);
     expect(ui.calls).toContain('start: Updating the lockfile');
   });

@@ -75,16 +75,30 @@ describe('installCommand', () => {
 
   it('ok installs in the project', () => {
     const ok = { kind: 'ok', version: '12.15.0' } as const;
-    expect(installCommand(ok, dir, false)).toEqual({ cmd: 'pnpm', args: ['install'], cwd: dir });
+    expect(installCommand(ok, dir, false)).toEqual({
+      cmd: 'pnpm',
+      args: ['install', '--no-frozen-lockfile'],
+      cwd: dir,
+    });
     expect(installCommand(ok, dir, true)).toEqual({
       cmd: 'pnpm',
-      args: ['install', '--lockfile-only'],
+      args: ['install', '--no-frozen-lockfile', '--lockfile-only'],
       cwd: dir,
     });
   });
 
   it('none goes through npm exec from the parent folder', () => {
-    const base = ['exec', '--yes', '--package=pnpm@12.15.0', '--', 'pnpm', 'install', '--dir', dir];
+    const base = [
+      'exec',
+      '--yes',
+      '--package=pnpm@12.15.0',
+      '--',
+      'pnpm',
+      'install',
+      '--dir',
+      dir,
+      '--no-frozen-lockfile',
+    ];
     expect(installCommand({ kind: 'none' }, dir, false)).toEqual({
       cmd: 'npm',
       args: base,
