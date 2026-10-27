@@ -7,6 +7,9 @@ describe('packageNameFromFolder', () => {
     ['My Tools', undefined, 'my-tools'],
     ['/tmp/x/Acme_Libs', undefined, 'acme_libs'],
     ['.', '/home/u/proj', 'proj'],
+    ['Café', undefined, 'cafe'],
+    ['Señor Tools', undefined, 'senor-tools'],
+    ['_utils', undefined, 'utils'],
     ['a//b  c!!d', undefined, 'b-c-d'],
     ['--lead.', undefined, 'lead'],
     [
@@ -26,6 +29,9 @@ describe('packageNameFromFolder', () => {
   it('accepts 214 characters and rejects 215', () => {
     expect(packageNameFromFolder('a'.repeat(214))).toHaveLength(214);
     expect(() => packageNameFromFolder('a'.repeat(215))).toThrow(NameError);
+    expect(() => packageNameFromFolder('a'.repeat(215))).toThrow(
+      `"${'a'.repeat(215)}" gives a package name over 214 characters`
+    );
   });
 });
 
@@ -56,7 +62,10 @@ describe('normalizeScope', () => {
     });
   });
 
-  it.each(['', '@', 'a/b'])('rejects %j', (input) => {
-    expect(normalizeScope(input).ok).toBe(false);
-  });
+  it.each(['', '@', 'a/b', '@.acme', '@_acme', '@-acme', 'acme'.replace('a', '-a')])(
+    'rejects %j',
+    (input) => {
+      expect(normalizeScope(input).ok).toBe(false);
+    }
+  );
 });

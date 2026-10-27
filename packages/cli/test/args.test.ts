@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EXAMPLES, parseArgv } from '../src/args';
+import { EXAMPLES, type Options, parseArgv } from '../src/args';
 
 function options(argv: string[]) {
   const result = parseArgv(argv);
@@ -19,14 +19,15 @@ describe('parseArgv', () => {
   });
 
   it('defaults', () => {
-    expect(options([])).toEqual({
+    const defaults: Options = {
       git: true,
       install: true,
       force: false,
       yes: false,
       help: false,
       version: false,
-    });
+    };
+    expect(options([])).toEqual(defaults);
   });
 
   it('reads a folder and -y', () => {
@@ -61,6 +62,12 @@ describe('parseArgv', () => {
     expect(options(['-v'])).toMatchObject({ version: true });
   });
 
+  it('joins repeated --examples flags', () => {
+    expect(options(['x', '--examples', 'lib', '--examples', 'cli'])).toMatchObject({
+      examples: ['lib', 'cli'],
+    });
+  });
+
   it('records --scope as typed without validating it', () => {
     expect(options(['x', '--scope', '@Not Valid'])).toMatchObject({ scope: '@Not Valid' });
   });
@@ -87,6 +94,6 @@ describe('parseArgv', () => {
   });
 
   it('turns other parser errors into a message instead of throwing', () => {
-    expect(message(['--scope'])).toMatch(/--scope/);
+    expect(message(['--scope'])).toMatch(/--scope.*\. Run with --help to see the options\.$/);
   });
 });
