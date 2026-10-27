@@ -14,32 +14,43 @@ const fake =
 
 describe('detectPnpm', () => {
   it('classifies the version', async () => {
-    expect(await detectPnpm(fake(0, '12.15.0\n'), '/p')).toEqual({
+    expect(await detectPnpm('/p', fake(0, '12.15.0\n'))).toEqual({
       kind: 'ok',
       version: '12.15.0',
     });
-    expect(await detectPnpm(fake(0, '10.26.2\n'), '/p')).toEqual({
+    expect(await detectPnpm('/p', fake(0, '10.26.2\n'))).toEqual({
       kind: 'ok',
       version: '10.26.2',
     });
-    expect(await detectPnpm(fake(0, '9.15.9\n'), '/p')).toEqual({ kind: 'old', version: '9.15.9' });
+    expect(await detectPnpm('/p', fake(0, '9.15.9\n'))).toEqual({ kind: 'old', version: '9.15.9' });
+  });
+
+  it('accepts pre-releases', async () => {
+    expect(await detectPnpm('/p', fake(0, '11.0.0-rc.1\n'))).toEqual({
+      kind: 'ok',
+      version: '11.0.0-rc.1',
+    });
+    expect(await detectPnpm('/p', fake(0, '9.0.0-beta.2\n'))).toEqual({
+      kind: 'old',
+      version: '9.0.0-beta.2',
+    });
   });
 
   it('is none when pnpm fails, is missing, or prints nonsense', async () => {
-    expect(await detectPnpm(fake(127), '/p')).toEqual({ kind: 'none' });
-    expect(await detectPnpm(fake(0, 'hello\n'), '/p')).toEqual({ kind: 'none' });
+    expect(await detectPnpm('/p', fake(127))).toEqual({ kind: 'none' });
+    expect(await detectPnpm('/p', fake(0, 'hello\n'))).toEqual({ kind: 'none' });
     const throwing: Exec = async () => {
       throw new Error('boom');
     };
-    expect(await detectPnpm(throwing, '/p')).toEqual({ kind: 'none' });
+    expect(await detectPnpm('/p', throwing)).toEqual({ kind: 'none' });
   });
 
   it('runs from the given folder', async () => {
     const calls: unknown[] = [];
-    await detectPnpm(async (cmd, args, opts) => {
+    await detectPnpm('/parent', async (cmd, args, opts) => {
       calls.push([cmd, args, opts]);
       return { code: 0, stdout: '12.15.0', stderr: '' };
-    }, '/parent');
+    });
     expect(calls).toEqual([['pnpm', ['--version'], { cwd: '/parent' }]]);
   });
 });
@@ -78,6 +89,10 @@ describe('installCommand', () => {
     expect(installCommand({ kind: 'none' }, dir, true)?.args).toEqual([...base, '--lockfile-only']);
   });
 
+  it('rejects a relative directory', () => {
+    expect(() => installCommand({ kind: 'none' }, 'my-tools', false)).toThrow('absolute');
+  });
+
   it('old has no command', () => {
     expect(installCommand({ kind: 'old', version: '9.0.0' }, dir, false)).toBeNull();
   });
@@ -86,21 +101,49 @@ describe('installCommand', () => {
 describe('quoteWindowsArg', () => {
   it('quotes spaces, embedded quotes and empty arguments', () => {
     expect(quoteWindowsArg('C:\\my tools')).toBe('"C:\\my tools"');
-    expect(quoteWindowsArg('say "hi"')).toBe('"say \\"hi\\""');
     expect(quoteWindowsArg('')).toBe('""');
+  });
+
+  it('rejects what cmd.exe would misread', () => {
+    expect(() => quoteWindowsArg('say "hi"')).toThrow('cmd.exe');
+    expect(() => quoteWindowsArg('%PATH%')).toThrow('cmd.exe');
+    expect(() => quoteWindowsArg('C:\\dir\\')).toThrow('cmd.exe');
   });
 });
 
 describe('defaultExec', () => {
   it('collects output and exit code', async () => {
+    const result = await defaultExec(process.execPath, ['-e', 'console.log(1+1);process.exit(3)'], {
+      cwd: process.cwd(),
+    });
+    expect(result).toMatchObject({ code: 3, stdout: expect.stringContaining('2') });
+  });
+
+  it('passes awkward arguments through intact', async () => {
     const result = await defaultExec(
       process.execPath,
-      ['-e', 'console.log("hi");process.exit(3)'],
+      ['-e', 'console.log(process.argv[1])', 'a b & c'],
+      { cwd: process.cwd() }
+    );
+    expect(result.stdout.trim()).toBe('a b & c');
+  });
+
+  it('runs a .cmd shim such as npm', async () => {
+    const result = await defaultExec('npm', ['--version'], { cwd: process.cwd() });
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  it('reports a signal death as 128 plus the signal number', async () => {
+    if (process.platform === 'win32') return;
+    const result = await defaultExec(
+      process.execPath,
+      ['-e', 'process.kill(process.pid, "SIGTERM")'],
       {
         cwd: process.cwd(),
       }
     );
-    expect(result).toMatchObject({ code: 3, stdout: expect.stringContaining('hi') });
+    expect(result.code).toBe(128 + 15);
   });
 
   it('resolves 127 when the command does not exist', async () => {

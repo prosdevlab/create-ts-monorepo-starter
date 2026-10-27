@@ -41,13 +41,44 @@ snapshots:
 
 const bundled = readFileSync(join(templateDir(), 'pnpm-lock.yaml'), 'utf8');
 
+const tricky = `packages:
+
+  # a comment between entries
+
+  x@https://example.com/x.tgz:
+    resolution: {tarball: https://example.com/x.tgz}
+
+  # comment at the start of a line does not end the section
+  x@file:../y:
+    resolution: {directory: ../y}
+
+  pkg@1.0.0(react@18.0.0):
+    resolution: {integrity: sha512-z}
+
+  node@runtime:26.12.1:
+    resolution: {type: variations}
+`;
+
 describe('lockfileEntries', () => {
-  it('reads packages and snapshots from every document and unquotes keys', () => {
-    expect([...lockfileEntries(fixture)].sort()).toEqual([
-      '@scope/pkg@1.0.0',
-      'other@3.0.0',
-      'plain@2.0.0',
+  it('reads keys that contain colons, peer suffixes and comments', () => {
+    expect([...lockfileEntries(tricky)].sort()).toEqual([
+      'node@runtime:26.12.1',
+      'pkg@1.0.0(react@18.0.0)',
+      'x@file:../y',
+      'x@https://example.com/x.tgz',
     ]);
+  });
+
+  it('finds the node runtime in both sections of the bundled lockfile', () => {
+    const without = bundled
+      .split('\n')
+      .filter((l) => !l.startsWith('  node@runtime:26.12.1:'))
+      .join('\n');
+    expect(without).not.toBe(bundled);
+    expect(() => assertLockfileSubset(without, bundled)).toThrow(
+      /\+ packages: node@runtime:26\.12\.1\n\+ snapshots: node@runtime:26\.12\.1/
+    );
+    expect(lockfileEntries(bundled)).toContain('node@runtime:26.12.1');
   });
 
   it('reads both documents of the bundled lockfile', () => {

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { dirname } from 'node:path';
+import { constants } from 'node:os';
+import { dirname, isAbsolute } from 'node:path';
 import { pnpmSpec } from './template.js';
 
 export type PnpmStatus =
@@ -13,9 +14,12 @@ export type Exec = (
   opts: { cwd: string }
 ) => Promise<{ code: number; stdout: string; stderr: string }>;
 
-/** Quote one argument for cmd.exe: wrap in double quotes, escape embedded ones. */
+/** Quote one argument for cmd.exe. Rejects what quoting can't make safe: `"`, `%`, a trailing `\`. */
 export function quoteWindowsArg(arg: string): string {
-  return `"${arg.replaceAll('"', '\\"')}"`;
+  if (arg.includes('"') || arg.includes('%') || arg.endsWith('\\')) {
+    throw new Error(`Cannot pass this argument to cmd.exe safely: ${arg}`);
+  }
+  return `"${arg}"`;
 }
 
 /** Runs a command, collecting output; a spawn failure resolves with code 127. */
@@ -36,15 +40,25 @@ export const defaultExec: Exec = (cmd, args, { cwd }) =>
       stderr += chunk;
     });
     child.on('error', (error) => resolve({ code: 127, stdout, stderr: stderr + error.message }));
-    child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    child.on('close', (code, signal) => {
+      let exit = code ?? 128 + (signal ? (constants.signals[signal] ?? 0) : 0);
+      // cmd.exe starts fine and reports a missing command as 9009, or 1 plus a message.
+      if (
+        process.platform === 'win32' &&
+        (code === 9009 || (code === 1 && /is not recognized/.test(stderr)))
+      ) {
+        exit = 127;
+      }
+      resolve({ code: exit, stdout, stderr });
+    });
   });
 
 /** Runs `pnpm --version` in `cwd`, which must be outside the project so pnpm doesn't switch versions. */
-export async function detectPnpm(exec: Exec, cwd: string): Promise<PnpmStatus> {
+export async function detectPnpm(cwd: string, exec: Exec = defaultExec): Promise<PnpmStatus> {
   const result = await exec('pnpm', ['--version'], { cwd }).catch(() => null);
   if (result?.code !== 0) return { kind: 'none' };
   const version = result.stdout.split(/\r?\n/)[0]?.trim() ?? '';
-  const match = /^(\d+)\.\d+\.\d+$/.exec(version);
+  const match = /^(\d+)\.\d+\.\d+(?:-[\w.]+)?$/.exec(version);
   if (!match) return { kind: 'none' };
   return { kind: Number(match[1]) < 10 ? 'old' : 'ok', version };
 }
@@ -61,6 +75,7 @@ export function installCommand(
   dir: string,
   lockfileOnly: boolean
 ): { cmd: string; args: string[]; cwd: string } | null {
+  if (!isAbsolute(dir)) throw new Error(`installCommand needs an absolute directory, got: ${dir}`);
   const extra = lockfileOnly ? ['--lockfile-only'] : [];
   if (status.kind === 'ok') return { cmd: 'pnpm', args: ['install', ...extra], cwd: dir };
   if (status.kind === 'old') return null;
