@@ -1,5 +1,5 @@
 {
-  "name": "ts-monorepo-starter",
+  "name": "create-ts-monorepo-starter-workspace",
   "version": "0.1.0",
   "private": true,
   "workspaces": [
@@ -11,8 +11,6 @@
     "lint": "turbo lint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:browser": "turbo test:browser",
-    "size": "turbo size",
     "check:packages": "turbo check:package",
     "check:unused": "knip",
     "clean": "turbo clean && rm -rf node_modules",

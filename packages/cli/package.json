@@ -1,10 +1,15 @@
 {
-  "name": "@monorepo/cli",
+  "name": "create-ts-monorepo-starter",
   "version": "0.1.0",
-  "description": "Example command-line package: a bin, a Node build target, and a test that runs the built command",
+  "description": "Create a TypeScript monorepo from the ts-monorepo-starter template",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/prosdevlab/create-ts-monorepo-starter.git",
+    "directory": "packages/cli"
+  },
   "type": "module",
   "bin": {
-    "cli": "./dist/cli.js"
+    "create-ts-monorepo-starter": "./dist/cli.js"
   },
   "exports": {
     ".": {
@@ -16,7 +21,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=24"
+    "node": ">=22.13"
   },
   "scripts": {
     "build": "pnpm run clean && tsc -p tsconfig.json && node -e \"fs.chmodSync('dist/cli.js', 0o755)\"",
@@ -28,7 +33,8 @@
     "check:package": "publint --strict && attw --pack . --profile esm-only"
   },
   "devDependencies": {
-    "@types/node": "24.19.2",
+    "@tsconfig/node22": "22.0.6",
+    "@types/node": "22.20.5",
     "typescript": "7.0.2"
   }
 }

@@ -1,7 +1,7 @@
 name: Release
 
 # Called by CI's release job on pushes to main, after every check passes (workflow_run would also fire for fork PRs).
-# Publishes only when the repository variable NPM_PUBLISH is 'true', so copies of the template never publish by accident.
+# Publishes only when the repository variable NPM_PUBLISH is 'true', so a copy of this repository never publishes by accident.
 on:
   workflow_call:
   workflow_dispatch:

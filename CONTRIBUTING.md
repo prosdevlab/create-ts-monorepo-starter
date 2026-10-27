@@ -73,19 +73,3 @@ After making changes:
 ## Questions?
 
 If you have any questions, please open an issue or discussion in the repository.
-
-<!-- example:template-only -->
-## Example Markers
-
-The template's examples (`lib`, `cli`, `web`) are removable: every line that belongs to one sits between that example's
-markers, and lines only this repository needs sit between `template-only` markers. Each marker is alone on its line:
-
-- Markdown: `<!-- example:NAME -->` and `<!-- /example:NAME -->`
-- YAML, `.gitignore` and `.husky` hooks: `# example:NAME` and `# /example:NAME`
-- TypeScript, JavaScript, `tsconfig*.json` and `turbo.json`: `// example:NAME` and `// /example:NAME`
-
-A line belongs to at most one example, so name one example per line. Never put markers inside fenced code blocks (split the
-block instead) or in `package.json`, which is strict JSON. In `tsconfig*.json` and `turbo.json`, never make a marked
-block the last property of its object: put its comma inside the block, so removing it leaves no trailing comma.
-Run `node scripts/check-examples.mjs` to verify; CI runs it too.
-<!-- /example:template-only -->

@@ -1,8 +1,14 @@
 {
-  "extends": "../../tsconfig.json",
+  "extends": "@tsconfig/node22/tsconfig.json",
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
+    "moduleResolution": "Node16",
+    "module": "NodeNext",
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
     "types": [
       "node"
     ]

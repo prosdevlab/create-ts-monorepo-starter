@@ -1,14 +1,6 @@
 {
   "extends": "@tsconfig/node24/tsconfig.json",
   "compilerOptions": {
-    // example:lib
-    "paths": {
-      "@monorepo/shared": ["./packages/shared/src"],
-      "@monorepo/shared/*": ["./packages/shared/src/*"],
-      "@monorepo/lib": ["./packages/lib/src"],
-      "@monorepo/lib/*": ["./packages/lib/src/*"]
-    },
-    // /example:lib
     "strict": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
