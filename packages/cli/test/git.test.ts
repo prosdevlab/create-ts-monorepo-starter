@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +7,7 @@ import { gitIdentity, initAndCommit, insideGitRepo } from '../src/git';
 import { defaultExec, type Exec } from '../src/pnpm';
 
 let root: string;
+let queryEnv: Record<string, string | undefined> = {};
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'ctms-git-'));
 });
@@ -15,6 +17,7 @@ afterEach(() => {
 
 /** An Exec that runs git against a config of our choosing, not the developer's. */
 function withEnv(env: Record<string, string | undefined>): Exec {
+  queryEnv = env;
   return (cmd, args, opts) => defaultExec(cmd, args, { ...opts, env: { ...env, ...opts.env } });
 }
 
@@ -44,8 +47,12 @@ function noIdentityExec(): Exec {
   return withEnv(isolatedEnv(join(home, 'gitconfig'), home));
 }
 
-const git = async (exec: Exec, cwd: string, ...args: string[]) =>
-  (await exec('git', args, { cwd })).stdout.trim();
+// Test-only queries run git directly: git.exe needs no shell, so `%` formats are safe on Windows.
+const git = async (_exec: Exec, cwd: string, ...args: string[]) => {
+  const env = { ...process.env, ...queryEnv };
+  for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
+  return execFileSync('git', args, { cwd, env, encoding: 'utf8' }).trim();
+};
 
 describe('insideGitRepo', () => {
   it('is true in a subfolder of a repo and false in a plain folder', async () => {
