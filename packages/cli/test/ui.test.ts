@@ -4,7 +4,7 @@ import { Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import type { RunPlan, RunResult } from '../src/run';
 import { templateVersion } from '../src/template';
-import { helpText, plainUi, versionText } from '../src/ui';
+import { helpText, plainUi, shellQuote, versionText } from '../src/ui';
 
 const { version } = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8')
@@ -192,5 +192,31 @@ describe('plainUi', () => {
     const { ui, out } = capture();
     ui.outro(result, { ...plan, target: process.cwd() });
     expect(out()).toContain('Next: pnpm build && pnpm test');
+  });
+});
+
+describe('shellQuote', () => {
+  it('leaves safe paths alone', () => {
+    expect(shellQuote('my-tools/v1.2_x', 'linux')).toBe('my-tools/v1.2_x');
+    expect(shellQuote('C:\\work\\my-tools', 'win32')).toBe('C:\\work\\my-tools');
+  });
+
+  it('single-quotes on POSIX, escaping quotes', () => {
+    expect(shellQuote('my tools', 'darwin')).toBe("'my tools'");
+    expect(shellQuote('$HOME/x', 'linux')).toBe("'$HOME/x'");
+    expect(shellQuote("it's", 'linux')).toBe("'it'\\''s'");
+    expect(shellQuote('C:\\x', 'linux')).toBe("'C:\\x'");
+  });
+
+  it('double-quotes on Windows', () => {
+    expect(shellQuote('C:\\my tools', 'win32')).toBe('"C:\\my tools"');
+    expect(shellQuote('$x', 'win32')).toBe('"$x"');
+  });
+
+  it('quotes the cd line of the outro', () => {
+    const { ui, out } = capture();
+    ui.outro(result, { ...plan, target: resolve("it's here") });
+    const quoted = process.platform === 'win32' ? '"it\'s here"' : "'it'\\''s here'";
+    expect(out()).toContain(`Next: cd ${quoted} && pnpm build && pnpm test`);
   });
 });
