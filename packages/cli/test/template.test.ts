@@ -59,6 +59,11 @@ describe('bundled template', () => {
     expect(existsSync(join(dir, 'dist'))).toBe(false);
   });
 
+  it('turbo passes TEMPLATE_REF to the build task', () => {
+    const turbo = JSON.parse(readFileSync(join(root, '../../turbo.json'), 'utf8'));
+    expect(turbo.tasks.build.env).toContain('TEMPLATE_REF');
+  });
+
   it('fetch with TEMPLATE_REF records the branch commit', () => {
     const dist = join(tempDir(), 'dist');
     const result = fetchTemplate({ TEMPLATE_REF: 'main', TEMPLATE_DIST: dist });

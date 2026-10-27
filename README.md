@@ -100,9 +100,10 @@ pnpm check:unused    # knip
 pnpm check:packages  # publint on the package
 ```
 
-`pnpm build` runs `tsc -p tsconfig.json`, then marks `dist/cli.js` executable. The build script deletes `dist` first, so
-files from removed sources never ship. The package doesn't use `composite`: with it, `tsc` can skip writing anything
-after `dist` is deleted.
+`pnpm build` runs `tsc` into `build/`, bundles `build/cli.js` into `dist/cli.js` with Rollup, fetches the pinned template
+into `dist/template`, then marks `dist/cli.js` executable. `clean` deletes `dist` and `build` first, so files from removed
+sources never ship. The package doesn't use `composite`: with it, `tsc` can skip writing anything after `build` is deleted.
+`TEMPLATE_REF=<branch> pnpm build` bundles that branch instead of the pinned release.
 
 ### Making Changes
 

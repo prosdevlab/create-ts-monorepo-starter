@@ -17,9 +17,11 @@ import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const versionFile = resolve(process.env.TEMPLATE_VERSION_FILE ?? join(root, 'template-version.json'));
+const versionFile = resolve(
+  process.env.TEMPLATE_VERSION_FILE ?? join(root, 'template-version.json')
+);
 const dist = resolve(process.env.TEMPLATE_DIST ?? join(root, 'dist'));
-const ref = process.env.TEMPLATE_REF;
+const ref = process.env.TEMPLATE_REF || undefined;
 const renames = { '.gitignore': '_gitignore', '.npmrc': '_npmrc' };
 
 const { repository, tag, commit: pinned } = JSON.parse(readFileSync(versionFile, 'utf8'));
@@ -34,7 +36,10 @@ function fail(message) {
 }
 
 function git(...args) {
-  return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
+  return execFileSync('git', args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'inherit'],
+  }).trim();
 }
 
 // Renames dotfiles at any depth and returns every file path, relative to the template root.
@@ -42,6 +47,7 @@ function walk(dir) {
   const files = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     let path = join(dir, entry.name);
+    if (entry.isSymbolicLink()) throw new Error(`the template contains a symlink: ${path}`);
     if (entry.isDirectory()) {
       files.push(...walk(path));
       continue;
@@ -57,7 +63,19 @@ function walk(dir) {
 }
 
 try {
-  git('-c', 'advice.detachedHead=false', 'clone', '--depth', '1', '--branch', checkout, `https://github.com/${repository}.git`, clone);
+  git(
+    '-c',
+    'advice.detachedHead=false',
+    '-c',
+    'core.autocrlf=false',
+    'clone',
+    '--depth',
+    '1',
+    '--branch',
+    checkout,
+    `https://github.com/${repository}.git`,
+    clone
+  );
   const commit = git('-C', clone, 'rev-parse', 'HEAD');
   if (!ref && commit !== pinned) fail(`${tag} points at ${commit}, expected ${pinned}`);
 
@@ -66,6 +84,7 @@ try {
     .map((file) => relative(clone, file).split('\\').join('/'))
     .sort();
 
+  console.log(`Bundling ${ref ? `branch ${ref}` : tag} at ${commit}`);
   rmSync(join(dist, 'template'), { recursive: true, force: true });
   mkdirSync(dist, { recursive: true });
   cpSync(clone, join(dist, 'template'), { recursive: true });
