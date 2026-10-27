@@ -140,7 +140,7 @@ chore: update dependencies
 - Triggers: Push to main OR Pull Request to main
 - Node version: read from `package.json` (`devEngines.runtime` pins 26.12.1)
 - Steps: Install → Audit → Lint → Unused code → Build → Typecheck → Test → Package checks
-- `compat` job: build, then the unit tests on Node 22, 24 and 26 × Linux, macOS, Windows. It calls Vitest with `node` directly,
+- `compat` job: build, then the unit tests on Node 22, 24 and 26 × Linux, macOS, Windows, plus Node 22.13.0 (the `engines.node` floor) on Linux. It calls Vitest with `node` directly,
   because pnpm would run it on the pinned Node 26
 - Least-privilege `permissions`; every action pinned to a commit SHA with the version in a comment
 - `workflows` job: zizmor (version pinned in `ZIZMOR_VERSION`, raised by hand) audits every workflow and fails on
