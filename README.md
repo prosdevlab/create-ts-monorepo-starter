@@ -43,10 +43,13 @@ create-ts-monorepo-starter/
 ├── .husky/              # Git hooks
 ├── docs/                # Design and plans for the CLI
 ├── packages/cli/        # The create-ts-monorepo-starter package
+├── .editorconfig        # Editor defaults matching Biome's formatter
 ├── AGENTS.md            # Instructions for coding agents (CLAUDE.md imports it)
 ├── biome.json           # Biome configuration
+├── commitlint.config.js # Commitlint configuration
 ├── package.json         # Root package.json
 ├── pnpm-workspace.yaml  # PNPM workspace config (3-day minimum release age)
+├── SECURITY.md          # How to report a vulnerability privately
 ├── tsconfig.json        # Base TypeScript config
 ├── turbo.json           # Turborepo config
 └── vitest.config.ts     # Vitest config
