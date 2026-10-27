@@ -62,6 +62,18 @@ jobs:
       - name: Package checks
         run: pnpm check:packages
 
+      # A tar keeps the template's dotfiles and file modes, which artifacts drop; cli.js reads ../package.json.
+      - name: Pack the built CLI
+        run: tar -cf cli-dist.tar -C packages/cli package.json dist
+
+      - name: Upload the built CLI
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-dist
+          path: cli-dist.tar
+          if-no-files-found: error
+          retention-days: 7
+
   # Runs the unit tests on every Node.js major the packages support (engines.node), on Linux, macOS and Windows.
   compat:
     name: test (node ${{ matrix.node }}, ${{ matrix.os }})
@@ -97,6 +109,120 @@ jobs:
         run: |
           node --version
           node node_modules/vitest/vitest.mjs run
+
+  # Generates every combination of examples with the built CLI and runs each project's own CI.
+  # Windows runs only the all-examples project, to keep the job short.
+  e2e:
+    name: e2e (${{ matrix.os }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            subsets: ''
+          - os: windows-latest
+            subsets: lib,cli,web
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      E2E_SUBSETS: ${{ matrix.subsets }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: package.json
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download the built CLI
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cli-dist
+
+      - name: Unpack the built CLI
+        shell: bash
+        run: tar -xf cli-dist.tar -C packages/cli
+
+      # An empty E2E_SUBSETS runs every subset.
+      - name: Generated-project tests
+        run: pnpm test:e2e
+
+  # Runs the built CLI with -y on a machine with no pnpm, a pnpm too old to use, and pnpm 10.
+  fresh-machine:
+    name: fresh machine (pnpm ${{ matrix.pnpm }}, ${{ matrix.os }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        pnpm: [none, 9.15.9, 10.34.8]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PNPM_CASE: ${{ matrix.pnpm }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No pnpm setup: a user's machine has only Node.js and npm.
+      - name: Use Node.js 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      # Hosted images ship pnpm (and corepack shims); delete every copy on PATH.
+      - name: Remove pnpm
+        if: matrix.pnpm == 'none'
+        run: |
+          corepack disable || true
+          sudo=$([ "$RUNNER_OS" = Windows ] || echo sudo)
+          for _ in 1 2 3 4 5 6 7 8; do
+            hash -r
+            found=$(command -v pnpm || true)
+            [ -z "$found" ] && break
+            dir=$(dirname "$found")
+            echo "Removing pnpm from $dir"
+            $sudo rm -f "$dir"/pnpm "$dir"/pnpm.cmd "$dir"/pnpm.ps1 "$dir"/pnpm.exe \
+              "$dir"/pnpx "$dir"/pnpx.cmd "$dir"/pnpx.ps1 "$dir"/pnpx.exe
+          done
+          hash -r
+          if pnpm --version; then echo "pnpm is still on PATH"; exit 1; fi
+
+      - name: Install pnpm ${{ matrix.pnpm }}
+        if: matrix.pnpm != 'none'
+        # The exact old pnpm a user may have is what this job tests, so no lockfile applies.
+        run: npm install -g "pnpm@$PNPM_CASE" # zizmor: ignore[adhoc-packages]
+
+      - name: Download the built CLI
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cli-dist
+          path: ${{ runner.temp }}/cli
+
+      - name: Unpack the built CLI
+        working-directory: ${{ runner.temp }}/cli
+        run: tar -xf cli-dist.tar
+
+      # The script runs the CLI in a temp folder outside any repository, with its own git identity.
+      - name: Run the CLI and check the result
+        run: node packages/cli/test/e2e/fresh-machine.mjs "$RUNNER_TEMP/cli/dist/cli.js" "$PNPM_CASE"
 
   # Audits the workflows themselves (zizmor): injection, excessive permissions, unsafe triggers, unpinned actions.
   workflows:
@@ -153,7 +279,7 @@ jobs:
   # Releases only on pushes to main, after every check passes. Pull requests, including forks, never reach it.
   # The trusted publisher on npmjs.com names this file (ci.yml): npm checks the calling workflow.
   release:
-    needs: [build, compat, workflows]
+    needs: [build, compat, e2e, fresh-machine, workflows]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write # version PR branch, git tags, GitHub releases

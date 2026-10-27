@@ -235,58 +235,65 @@ const EXAMPLE_HINTS = (scope: string): Record<Example, string> => ({
   web: 'a library loaded in web pages by a script tag · browser tests, accessibility checks, a size budget',
 });
 
+/** The clack prompts the questions use; tests pass fakes. */
+export type Prompts = Pick<typeof p, 'text' | 'confirm' | 'multiselect'>;
+
 /** The questions, asked only when stdin and stdout are terminals and `-y` isn't set. */
-export const ask = {
-  folder: async (validate: (value: string) => string | undefined) =>
-    answer(
-      await p.text({
-        message: 'Project folder',
-        placeholder: 'my-ts-monorepo',
-        defaultValue: 'my-ts-monorepo',
-        validate: (value) => validate(value || 'my-ts-monorepo'),
-      })
-    ),
-  recommended: async (summary: string) =>
-    answer(
-      await p.confirm({
-        message: 'Use the recommended setup?',
-        active: `Yes · ${summary}`,
-        inactive: 'No',
-        initialValue: true,
-      })
-    ),
-  scope: async (initial: string, validate: (value: string) => string | undefined) =>
-    answer(
-      await p.text({
-        message: 'npm scope for your packages',
-        initialValue: initial,
-        validate: (value) => validate(value ?? ''),
-      })
-    ),
-  examples: async (scope: string, initial: Example[]) => {
-    const hints = EXAMPLE_HINTS(scope);
-    return answer(
-      await p.multiselect<Example>({
-        message: 'Which examples do you want?',
-        options: EXAMPLES.map((value) => ({
-          value,
-          label: value,
-          hint: hints[value],
-        })),
-        initialValues: initial,
-        required: true,
-      })
-    );
-  },
-  git: async (initial: boolean) =>
-    answer(await p.confirm({ message: 'Initialize git?', initialValue: initial })),
-  install: async (initial: boolean) =>
-    answer(await p.confirm({ message: 'Install dependencies?', initialValue: initial })),
-  replace: async (folder: string, count: number, backupName: string) =>
-    answer(
-      await p.confirm({
-        message: `${folder} already has ${count} ${count === 1 ? 'file' : 'files'}. Move them to ${backupName} and continue?`,
-        initialValue: false,
-      })
-    ),
-};
+export function createAsk(prompts: Prompts = p) {
+  return {
+    folder: async (validate: (value: string) => string | undefined) =>
+      answer(
+        await prompts.text({
+          message: 'Project folder',
+          placeholder: 'my-ts-monorepo',
+          defaultValue: 'my-ts-monorepo',
+          validate: (value) => validate(value || 'my-ts-monorepo'),
+        })
+      ),
+    recommended: async (summary: string) =>
+      answer(
+        await prompts.confirm({
+          message: 'Use the recommended setup?',
+          active: `Yes · ${summary}`,
+          inactive: 'No',
+          initialValue: true,
+        })
+      ),
+    scope: async (initial: string, validate: (value: string) => string | undefined) =>
+      answer(
+        await prompts.text({
+          message: 'npm scope for your packages',
+          initialValue: initial,
+          validate: (value) => validate(value ?? ''),
+        })
+      ),
+    examples: async (scope: string, initial: Example[]) => {
+      const hints = EXAMPLE_HINTS(scope);
+      return answer(
+        await prompts.multiselect<Example>({
+          message: 'Which examples do you want?',
+          options: EXAMPLES.map((value) => ({
+            value,
+            label: value,
+            hint: hints[value],
+          })),
+          initialValues: initial,
+          required: true,
+        })
+      );
+    },
+    git: async (initial: boolean) =>
+      answer(await prompts.confirm({ message: 'Initialize git?', initialValue: initial })),
+    install: async (initial: boolean) =>
+      answer(await prompts.confirm({ message: 'Install dependencies?', initialValue: initial })),
+    replace: async (folder: string, count: number, backupName: string) =>
+      answer(
+        await prompts.confirm({
+          message: `${folder} already has ${count} ${count === 1 ? 'file' : 'files'}. Move them to ${backupName} and continue?`,
+          initialValue: false,
+        })
+      ),
+  };
+}
+
+export type Ask = ReturnType<typeof createAsk>;
