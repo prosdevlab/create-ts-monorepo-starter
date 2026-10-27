@@ -34,3 +34,15 @@ export function pnpmSpec(
   }
   return spec;
 }
+
+/** This CLI's version, from the package.json that ships next to dist/ (and src/). */
+export function cliVersion(): string {
+  const manifest = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+  return (JSON.parse(manifest) as { version: string }).version;
+}
+
+/** The template's tag, or its short commit for a TEMPLATE_REF build. */
+export function templateLabel(): string {
+  const { tag, commit } = templateVersion();
+  return tag ?? commit.slice(0, 7);
+}
