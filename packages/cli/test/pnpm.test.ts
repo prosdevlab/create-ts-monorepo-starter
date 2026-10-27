@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   defaultExec,
   detectInvoker,
@@ -112,9 +115,18 @@ describe('quoteWindowsArg', () => {
 });
 
 describe('defaultExec', () => {
+  // A scratch folder: npm refuses to run inside a project whose devEngines don't match.
+  let cwd = '';
+  beforeAll(() => {
+    cwd = mkdtempSync(join(tmpdir(), 'exec-test-'));
+  });
+  afterAll(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
   it('collects output and exit code', async () => {
     const result = await defaultExec(process.execPath, ['-e', 'console.log(1+1);process.exit(3)'], {
-      cwd: process.cwd(),
+      cwd: cwd,
     });
     expect(result).toMatchObject({ code: 3, stdout: expect.stringContaining('2') });
   });
@@ -123,14 +135,14 @@ describe('defaultExec', () => {
     const result = await defaultExec(
       process.execPath,
       ['-e', 'console.log(process.argv[1])', 'a b & c'],
-      { cwd: process.cwd() }
+      { cwd: cwd }
     );
     expect(result.stdout.trim()).toBe('a b & c');
   });
 
   it('runs a .cmd shim such as npm', async () => {
-    const result = await defaultExec('npm', ['--version'], { cwd: process.cwd() });
-    expect(result.code).toBe(0);
+    const result = await defaultExec('npm', ['--version'], { cwd: cwd });
+    expect(result, result.stderr).toMatchObject({ code: 0 });
     expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
   });
 
@@ -140,14 +152,14 @@ describe('defaultExec', () => {
       process.execPath,
       ['-e', 'process.kill(process.pid, "SIGTERM")'],
       {
-        cwd: process.cwd(),
+        cwd: cwd,
       }
     );
     expect(result.code).toBe(128 + 15);
   });
 
   it('resolves 127 when the command does not exist', async () => {
-    const result = await defaultExec('definitely-not-a-command-xyz', [], { cwd: process.cwd() });
+    const result = await defaultExec('definitely-not-a-command-xyz', [], { cwd: cwd });
     expect(result.code).toBe(127);
   });
 });
