@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 export type Example = 'lib' | 'cli' | 'web';
 export const EXAMPLES: readonly Example[] = ['lib', 'cli', 'web'];
 
-interface Options {
+export interface Options {
   folder?: string;
   scope?: string;
   examples?: Example[];
@@ -74,7 +74,7 @@ export function parseArgv(argv: string[]): ParseResult {
   if (positionals[0] !== undefined) options.folder = positionals[0];
   if (values.scope !== undefined) options.scope = values.scope;
   if (values.examples !== undefined) {
-    const examples = parseExamples(values.examples);
+    const examples = parseExamples(values.examples.join(','));
     if (typeof examples === 'string') return { ok: false, message: examples };
     options.examples = examples;
   }
@@ -89,7 +89,7 @@ function parse(argv: string[]) {
     strict: true,
     options: {
       scope: { type: 'string' },
-      examples: { type: 'string' },
+      examples: { type: 'string', multiple: true },
       git: { type: 'boolean' },
       install: { type: 'boolean' },
       force: { type: 'boolean' },
