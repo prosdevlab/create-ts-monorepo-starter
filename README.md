@@ -97,7 +97,7 @@ pnpm lint            # Biome
 pnpm format          # Biome, with fixes
 pnpm typecheck       # run after pnpm build
 pnpm check:unused    # knip
-pnpm check:packages  # publint and attw on the packed package
+pnpm check:packages  # publint on the package
 ```
 
 `pnpm build` runs `tsc -p tsconfig.json`, then marks `dist/cli.js` executable. The build script deletes `dist` first, so
@@ -169,7 +169,7 @@ How a release runs: CI's `release` job calls `.github/workflows/release.yml` on 
 
 ### Package Checks
 
-`pnpm check:packages` packs the package the way it would be published and checks the result: [publint](https://publint.dev) checks the layout (`exports`, `types` and `bin` point at files in the tarball), and [Are The Types Wrong](https://arethetypeswrong.github.io) checks that the types resolve for each way to import it (ESM only). The package lists `"files": ["dist"]`: without it, what ships depends on the tool.
+`pnpm check:packages` runs [publint](https://publint.dev) on the package and its bundle (`bin` points at a file that ships); this package has no `exports` or types, so there is nothing for Are The Types Wrong to check. The package lists `"files": ["dist"]`: without it, what ships depends on the tool.
 
 ### Unused Code
 

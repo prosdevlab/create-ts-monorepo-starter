@@ -1,14 +1,11 @@
 {
   "extends": "@tsconfig/node22/tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist",
+    "outDir": "./build",
     "rootDir": "./src",
     "moduleResolution": "Node16",
     "module": "NodeNext",
     "forceConsistentCasingInFileNames": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
     "types": [
       "node"
     ]
@@ -19,6 +16,7 @@
   "exclude": [
     "node_modules",
     "dist",
+    "build",
     "**/*.test.ts"
   ]
 }

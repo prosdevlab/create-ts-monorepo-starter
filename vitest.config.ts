@@ -6,6 +6,8 @@ export default defineConfig({
     environment: 'node',
     restoreMocks: true,
     include: ['packages/**/*.{test,spec}.ts'],
+    // dist/ holds the bundled template with its own tests; build/ is tsc output.
+    exclude: ['**/node_modules/**', '**/dist/**', '**/build/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
