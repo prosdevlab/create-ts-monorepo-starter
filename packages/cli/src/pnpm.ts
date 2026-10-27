@@ -11,7 +11,7 @@ export type PnpmStatus =
 export type Exec = (
   cmd: string,
   args: string[],
-  opts: { cwd: string }
+  opts: { cwd: string; env?: Record<string, string> }
 ) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 /** Quote one argument for cmd.exe. Rejects what quoting can't make safe: `"`, `%`, a trailing `\`. */
@@ -35,9 +35,13 @@ export function windowsCommandLine(cmd: string, args: string[]): string {
 }
 
 /** Runs a command, collecting output; a spawn failure resolves with code 127. */
-export const defaultExec: Exec = (cmd, args, { cwd }) =>
+export const defaultExec: Exec = (cmd, args, { cwd, env }) =>
   new Promise((resolve) => {
-    const options = { cwd, stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'] };
+    const options = {
+      cwd,
+      env: env ? { ...process.env, ...env } : process.env,
+      stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
+    };
     // Windows runs pnpm/npm through .cmd shims, which need a shell and one quoted string.
     const child =
       process.platform === 'win32'
