@@ -44,7 +44,16 @@ describe('paths', () => {
     const temp = tempPath(target);
     expect(dirname(temp)).toBe(root);
     expect(basename(temp)).toMatch(/^\.my-tools\.tmp-[0-9a-f]{8}$/);
+    expect(dirname(tempPath('.'))).toBe(dirname(process.cwd()));
     expect(basename(tempPath(target, () => 'deadbeef'))).toBe('.my-tools.tmp-deadbeef');
+  });
+});
+
+describe('path resolution', () => {
+  it('treats a trailing slash like none', () => {
+    const now = new Date(2026, 9, 27, 10, 42, 5);
+    expect(backupPath('x/', now)).toBe(backupPath('x', now));
+    expect(backupPath('.', now)).toBe(backupPath(process.cwd(), now));
   });
 });
 
@@ -116,6 +125,48 @@ describe('moveIntoPlace', () => {
     expect(always.calls()).toBe(6);
   });
 
+  it('names both paths when the target is on another device', async () => {
+    const temp = join(root, '.t');
+    const target = join(root, 'out');
+    const err = Object.assign(new Error('EXDEV'), { code: 'EXDEV' });
+    const attempt = moveIntoPlace(temp, target, {
+      rename: (async () => {
+        throw err;
+      }) as never,
+      sleep: async () => undefined,
+    });
+    await expect(attempt).rejects.toThrow(/different devices/);
+    await expect(attempt).rejects.toThrow(temp);
+    await expect(attempt).rejects.toThrow(target);
+  });
+
+  it('refuses a temp folder inside the target', async () => {
+    const target = join(root, 'out');
+    const temp = join(target, '.t');
+    mkdirSync(temp, { recursive: true });
+    await expect(moveIntoPlace(temp, target)).rejects.toThrow(/inside the target/);
+    await expect(moveIntoPlace(target, target)).rejects.toThrow(/inside the target/);
+  });
+
+  it('retries EACCES only on win32', async () => {
+    const err = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    const run = async (platform: NodeJS.Platform) => {
+      const sleeps: number[] = [];
+      await moveIntoPlace(join(root, '.t'), join(root, 'out'), {
+        platform,
+        rename: (async () => {
+          if (sleeps.length < 1) throw err;
+        }) as never,
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      }).catch(() => undefined);
+      return sleeps;
+    };
+    expect(await run('win32')).toEqual([100]);
+    expect(await run('linux')).toEqual([]);
+  });
+
   it('rethrows other errors without retrying', async () => {
     const sleeps: number[] = [];
     const err = Object.assign(new Error('nope'), { code: 'ENOENT' });
@@ -177,10 +228,12 @@ describe('onInterrupt', () => {
   });
 
   it('stops listening once unregistered', () => {
-    const before = process.listenerCount('SIGTERM');
+    const before = { int: process.listenerCount('SIGINT'), term: process.listenerCount('SIGTERM') };
     const off = onInterrupt(join(root, '.t'), { exit: () => undefined });
-    expect(process.listenerCount('SIGTERM')).toBe(before + 1);
+    expect(process.listenerCount('SIGINT')).toBe(before.int + 1);
+    expect(process.listenerCount('SIGTERM')).toBe(before.term + 1);
     off();
-    expect(process.listenerCount('SIGTERM')).toBe(before);
+    expect(process.listenerCount('SIGINT')).toBe(before.int);
+    expect(process.listenerCount('SIGTERM')).toBe(before.term);
   });
 });

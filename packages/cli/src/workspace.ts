@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { rmSync } from 'node:fs';
-import { rename as fsRename, mkdir, readdir, rm, stat } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { rename as fsRename, lstat, mkdir, readdir, rmdir, stat } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
-const RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const RETRY_CODES = new Set(['EPERM', 'EBUSY']);
 const RETRY_DELAYS = [100, 200, 400, 800, 1600];
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -13,23 +13,30 @@ export function tempPath(
   target: string,
   random: () => string = () => randomBytes(4).toString('hex')
 ): string {
+  target = resolve(target);
   return join(dirname(target), `.${basename(target)}.tmp-${random()}`);
 }
 
 /** `<target>.backup-YYYYMMDD-HHMMSS` in local time. */
 export function backupPath(target: string, now: Date): string {
+  target = resolve(target);
   const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
   const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   return `${target}.backup-${date}-${time}`;
 }
 
+// lstat, so a dangling symlink counts as taken; only ENOENT means the name is free.
 const exists = (path: string) =>
-  stat(path).then(
+  lstat(path).then(
     () => true,
-    () => false
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    }
   );
 
 export async function targetState(target: string): Promise<'missing' | 'empty' | 'not-empty'> {
+  target = resolve(target);
   const info = await stat(target).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return null;
     throw error;
@@ -41,6 +48,7 @@ export async function targetState(target: string): Promise<'missing' | 'empty' |
 
 /** Renames the folder aside and returns the new path; an existing backup gets a `-N` suffix. */
 export async function backUp(target: string, now: Date): Promise<string> {
+  target = resolve(target);
   const base = backupPath(target, now);
   let candidate = base;
   for (let n = 1; await exists(candidate); n += 1) candidate = `${base}-${n}`;
@@ -50,6 +58,7 @@ export async function backUp(target: string, now: Date): Promise<string> {
 
 export type MoveDeps = {
   rename?: typeof fsRename;
+  platform?: NodeJS.Platform;
   sleep?: (ms: number) => Promise<void>;
 };
 
@@ -59,6 +68,17 @@ export async function moveIntoPlace(
   target: string,
   deps: MoveDeps = {}
 ): Promise<void> {
+  temp = resolve(temp);
+  target = resolve(target);
+  const inside = relative(target, temp);
+  if (inside === '' || (!inside.startsWith('..') && !isAbsolute(inside))) {
+    throw new Error(`The temporary folder ${temp} is inside the target ${target}`);
+  }
+  // EACCES is a transient lock on Windows but a real permission error elsewhere.
+  const retryCodes =
+    (deps.platform ?? process.platform) === 'win32'
+      ? new Set([...RETRY_CODES, 'EACCES'])
+      : RETRY_CODES;
   const rename = deps.rename ?? fsRename;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
   // Windows scanners and indexers briefly lock fresh files, so a refused rename is retried.
@@ -69,8 +89,14 @@ export async function moveIntoPlace(
         return;
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'EXDEV') {
+          throw new Error(
+            `Cannot move ${temp} to ${target}: they are on different devices. Choose a target on the same drive.`,
+            { cause: error }
+          );
+        }
         const delay = RETRY_DELAYS[attempt];
-        if (!code || !RETRY_CODES.has(code) || delay === undefined) throw error;
+        if (!code || !retryCodes.has(code) || delay === undefined) throw error;
         await sleep(delay);
       }
     }
@@ -84,7 +110,7 @@ export async function moveIntoPlace(
     return;
   }
   for (const entry of await readdir(temp)) await move(join(temp, entry), join(target, entry));
-  await rm(temp, { recursive: true, force: true });
+  await rmdir(temp);
 }
 
 /** On SIGINT or SIGTERM, deletes `temp` and exits 130. Returns the unregister function. */
@@ -94,8 +120,11 @@ export function onInterrupt(
 ): () => void {
   const exit = deps.exit ?? ((code: number) => process.exit(code));
   const handler = () => {
-    rmSync(temp, { recursive: true, force: true });
-    exit(130);
+    try {
+      rmSync(temp, { recursive: true, force: true });
+    } finally {
+      exit(130);
+    }
   };
   process.on('SIGINT', handler);
   process.on('SIGTERM', handler);
