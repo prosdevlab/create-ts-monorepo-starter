@@ -22,6 +22,18 @@ export function quoteWindowsArg(arg: string): string {
   return `"${arg}"`;
 }
 
+/**
+ * The cmd.exe command line. A bare command name stays unquoted: a quoted name makes `%~dp0` in a
+ * .cmd shim resolve to the cwd. A path (it may contain spaces) is quoted, which keeps `%~dp0` right.
+ */
+export function windowsCommandLine(cmd: string, args: string[]): string {
+  const isPath = /[\\/ ]/.test(cmd);
+  if (!isPath && !/^[A-Za-z0-9._-]+$/.test(cmd)) {
+    throw new Error(`Cannot run this command name through cmd.exe safely: ${cmd}`);
+  }
+  return [isPath ? quoteWindowsArg(cmd) : cmd, ...args.map(quoteWindowsArg)].join(' ');
+}
+
 /** Runs a command, collecting output; a spawn failure resolves with code 127. */
 export const defaultExec: Exec = (cmd, args, { cwd }) =>
   new Promise((resolve) => {
@@ -29,7 +41,7 @@ export const defaultExec: Exec = (cmd, args, { cwd }) =>
     // Windows runs pnpm/npm through .cmd shims, which need a shell and one quoted string.
     const child =
       process.platform === 'win32'
-        ? spawn([cmd, ...args].map(quoteWindowsArg).join(' '), { ...options, shell: true })
+        ? spawn(windowsCommandLine(cmd, args), { ...options, shell: true })
         : spawn(cmd, args, options);
     let stdout = '';
     let stderr = '';
