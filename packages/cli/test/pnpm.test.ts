@@ -9,6 +9,7 @@ import {
   type Exec,
   installCommand,
   quoteWindowsArg,
+  windowsCommandLine,
 } from '../src/pnpm';
 
 const fake =
@@ -111,6 +112,25 @@ describe('quoteWindowsArg', () => {
     expect(() => quoteWindowsArg('say "hi"')).toThrow('cmd.exe');
     expect(() => quoteWindowsArg('%PATH%')).toThrow('cmd.exe');
     expect(() => quoteWindowsArg('C:\\dir\\')).toThrow('cmd.exe');
+  });
+});
+
+describe('windowsCommandLine', () => {
+  it('leaves a bare command name unquoted and quotes the arguments', () => {
+    expect(windowsCommandLine('npm', ['exec', '--dir', 'C:\\my tools'])).toBe(
+      'npm "exec" "--dir" "C:\\my tools"'
+    );
+  });
+
+  it('quotes a command given as a path', () => {
+    expect(windowsCommandLine('C:\\Program Files\\nodejs\\node.exe', ['-v'])).toBe(
+      '"C:\\Program Files\\nodejs\\node.exe" "-v"'
+    );
+  });
+
+  it('rejects a bare name with a metacharacter', () => {
+    expect(() => windowsCommandLine('npm&calc', [])).toThrow('cmd.exe');
+    expect(() => windowsCommandLine('', [])).toThrow('cmd.exe');
   });
 });
 
