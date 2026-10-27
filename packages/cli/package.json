@@ -1,0 +1,34 @@
+{
+  "name": "@monorepo/cli",
+  "version": "0.1.0",
+  "description": "Example command-line package: a bin, a Node build target, and a test that runs the built command",
+  "type": "module",
+  "bin": {
+    "cli": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "pnpm run clean && tsc -p tsconfig.json && node -e \"fs.chmodSync('dist/cli.js', 0o755)\"",
+    "dev": "tsc -p tsconfig.json --watch",
+    "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint ./src ./test",
+    "format": "biome format --write ./src ./test",
+    "check:package": "publint --strict && attw --pack . --profile esm-only"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2"
+  }
+}
