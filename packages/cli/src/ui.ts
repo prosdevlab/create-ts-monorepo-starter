@@ -65,8 +65,14 @@ npm needs -- before the options. Docs: README of the generated project.`;
 function cdPath(target: string): string | null {
   const rel = relative(process.cwd(), target);
   if (rel === '') return null;
-  const path = rel.startsWith('..') || isAbsolute(rel) ? target : rel;
-  return /\s/.test(path) ? `"${path}"` : path;
+  return shellQuote(rel.startsWith('..') || isAbsolute(rel) ? target : rel);
+}
+
+/** Quotes a path for the user's shell unless it is only safe characters. */
+export function shellQuote(path: string, platform: NodeJS.Platform = process.platform): string {
+  const windows = platform === 'win32';
+  if ((windows ? /^[\w./\\:-]+$/ : /^[\w./-]+$/).test(path)) return path;
+  return windows ? `"${path}"` : `'${path.replaceAll("'", "'\\''")}'`;
 }
 
 /** What the final message says, shared by both looks. */

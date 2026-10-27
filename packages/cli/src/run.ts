@@ -8,7 +8,14 @@ import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from '
 import { defaultExec, detectPnpm, type Exec, installCommand, type PnpmStatus } from './pnpm.js';
 import { cliVersion, pnpmSpec, templateDir, templateLabel } from './template.js';
 import { CANCELLED, type Ui } from './ui.js';
-import { backUp, moveIntoPlace, onInterrupt, targetState, tempPath } from './workspace.js';
+import {
+  backUp,
+  backupPath,
+  moveIntoPlace,
+  onInterrupt,
+  targetState,
+  tempPath,
+} from './workspace.js';
 
 export interface RunPlan {
   target: string;
@@ -92,6 +99,34 @@ function lastLines(output: { stdout: string; stderr: string }): string[] {
   return lines.slice(-TAIL_LINES);
 }
 
+type Phase =
+  | { at: 'working' | 'backing-up' | 'moved' }
+  | { at: 'backed-up'; backup: string }
+  | { at: 'moving'; backup?: string };
+
+/** The line a Ctrl-C prints: "nothing was written" holds only until the backup starts. */
+function cancelMessage(phase: Phase, plan: RunPlan): [string, string[]] {
+  const { target } = plan;
+  switch (phase.at) {
+    case 'working':
+      return [CANCELLED, []];
+    case 'backing-up':
+      return [
+        `Cancelled. Your files are in ${target}, or in ${basename(backupPath(target, plan.now))} beside it.`,
+        [],
+      ];
+    case 'backed-up':
+      return [`Cancelled. Your files are in ${phase.backup}.`, []];
+    case 'moving': {
+      const partial = `The new project in ${target} may be incomplete.`;
+      if (phase.backup) return [`Cancelled. Your files are in ${phase.backup}.`, [partial]];
+      return ['Cancelled while moving the project into place.', [partial]];
+    }
+    case 'moved':
+      return [`Cancelled after the project was created in ${target}.`, []];
+  }
+}
+
 const firstLine = (error: unknown) =>
   (error instanceof Error ? error.message : String(error)).split('\n')[0] ?? '';
 
@@ -102,11 +137,17 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
   const parent = dirname(plan.target);
   const name = basename(plan.target);
   const temp = tempPath(plan.target);
+  // What a Ctrl-C has to report changes once the user's folder is moved aside or ours moves in.
+  let phase: Phase = { at: 'working' };
   const unregister = (deps.onInterrupt ?? onInterrupt)(temp, {
     exit: (code) => {
-      ui.stop();
-      ui.fail(CANCELLED, []);
-      process.exit(code);
+      try {
+        ui.stop();
+        const [title, lines] = cancelMessage(phase, plan);
+        ui.fail(title, lines);
+      } finally {
+        process.exit(code);
+      }
     },
   });
   try {
@@ -210,11 +251,15 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
 
     let backup: string | undefined;
     if (plan.replace && (await targetState(plan.target)) === 'not-empty') {
+      phase = { at: 'backing-up' };
       backup = await backUp(plan.target, plan.now);
+      phase = { at: 'backed-up', backup };
       ui.step(`Moved the old ${name} to ${basename(backup)}`);
     }
     try {
+      phase = { at: 'moving', ...(backup && { backup }) };
       await (deps.moveIntoPlace ?? moveIntoPlace)(temp, plan.target);
+      phase = { at: 'moved' };
     } catch (error) {
       if (!backup) throw error;
       throw new RunError(`Couldn't move the project into place: ${firstLine(error)}`, [

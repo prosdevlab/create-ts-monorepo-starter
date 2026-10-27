@@ -117,7 +117,7 @@ The run-time steps are mechanical:
 6. **Commit** everything as `chore: initial commit from create-ts-monorepo-starter 1.0.0 (template v2.3.0)`, a conventional message the commit-msg hook accepts, with `--no-verify`: the pre-commit hook runs typecheck, which needs a build first, and the CLI's tests already ran every check on this exact output.
 7. **Move** the temporary folder into place.
 
-With `--no-install`, step 5's install is skipped: the lockfile still names the old scope and the git hooks aren't installed until the project's first `pnpm install`. The final message says so.
+With `--no-install`, step 5 runs `pnpm install --lockfile-only` instead: the lockfile takes the new names without installing anything, and the git hooks aren't installed until the project's first `pnpm install`. The final message says so.
 
 ## Libraries and build
 

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Exec } from '../src/pnpm';
 import { planFromOptions, type RunDeps, type RunPlan, run } from '../src/run';
 import type { Ui } from '../src/ui';
@@ -343,5 +343,73 @@ describe('run', () => {
     );
     expect(leftovers()).toEqual(['my-tools']);
     expect(await readdir(target)).toEqual(['notes.txt']);
+  });
+
+  describe('on Ctrl-C', () => {
+    type Exit = (code: number) => void;
+    let interrupt: Exit | undefined;
+    const catching = (overrides: Partial<RunDeps> = {}) =>
+      deps({
+        onInterrupt: (_temp, options) => {
+          interrupt = options?.exit;
+          return () => log.push('unregister');
+        },
+        ...overrides,
+      });
+    beforeEach(() => {
+      interrupt = undefined;
+      vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    });
+
+    it('says nothing was written before the backup starts', async () => {
+      const ui = recordingUi();
+      const generate: RunDeps['generate'] = async () => {
+        interrupt?.(130);
+        throw new Error('stop here');
+      };
+      await expect(run(plan(), ui, catching({ generate }))).rejects.toThrow('stop here');
+      expect(ui.calls).toEqual(['stop', 'fail: Cancelled. Nothing was written.']);
+      expect(process.exit).toHaveBeenCalledWith(130);
+    });
+
+    it('says where the files are once they were moved aside', async () => {
+      const target = join(root, 'my-tools');
+      mkdirSync(target);
+      writeFileSync(join(target, 'notes.txt'), 'keep me');
+      const ui = recordingUi();
+      const moveIntoPlace: RunDeps['moveIntoPlace'] = async () => {
+        interrupt?.(130);
+      };
+      await run(plan({ replace: true }), ui, catching({ moveIntoPlace }));
+      const backup = `${target}.backup-20261027-000000`;
+      expect(ui.calls.slice(-2)).toEqual([
+        'stop',
+        `fail: Cancelled. Your files are in ${backup}. | The new project in ${target} may be incomplete.`,
+      ]);
+      expect(ui.calls.join('\n')).not.toContain('Nothing was written');
+      expect(process.exit).toHaveBeenCalledWith(130);
+    });
+
+    it('does not claim nothing was written after the move', async () => {
+      const ui = recordingUi();
+      await run(plan(), ui, catching());
+      interrupt?.(130);
+      expect(ui.calls.at(-1)).toBe(
+        `fail: Cancelled after the project was created in ${join(root, 'my-tools')}.`
+      );
+    });
+
+    it('still exits 130 when the Ui throws', async () => {
+      const ui = recordingUi();
+      ui.fail = () => {
+        throw new Error('write EPIPE');
+      };
+      const generate: RunDeps['generate'] = async () => {
+        expect(() => interrupt?.(130)).toThrow('EPIPE');
+        throw new Error('stop here');
+      };
+      await expect(run(plan(), ui, catching({ generate }))).rejects.toThrow('stop here');
+      expect(process.exit).toHaveBeenCalledWith(130);
+    });
   });
 });
