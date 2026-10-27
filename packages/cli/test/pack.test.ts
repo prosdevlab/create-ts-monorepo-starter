@@ -17,8 +17,10 @@ it('the published tarball keeps every template file', () => {
     });
     const [tarball] = readdirSync(out);
     const listed = new Set(
-      execFileSync('tar', ['-tzf', join(out, tarball)], { encoding: 'utf8' })
-        .split('\n')
+      // Bare file name with cwd: GNU tar reads `C:\...` as a remote host. Windows lines end in \r\n.
+      execFileSync('tar', ['-tzf', tarball], { cwd: out, encoding: 'utf8' })
+        .split(/\r?\n/)
+        .map((line) => line.trim())
         .filter(Boolean)
     );
     const manifest: string[] = JSON.parse(
