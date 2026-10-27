@@ -7,8 +7,10 @@ import {
   detectInvoker,
   detectPnpm,
   type Exec,
+  hasLiveChildren,
   installCommand,
   quoteWindowsArg,
+  stopChildren,
   windowsCommandLine,
 } from '../src/pnpm';
 
@@ -18,44 +20,56 @@ const fake =
 
 describe('detectPnpm', () => {
   it('classifies the version', async () => {
-    expect(await detectPnpm('/p', fake(0, '12.15.0\n'))).toEqual({
+    expect(await detectPnpm(fake(0, '12.15.0\n'))).toEqual({
       kind: 'ok',
       version: '12.15.0',
     });
-    expect(await detectPnpm('/p', fake(0, '10.26.2\n'))).toEqual({
+    expect(await detectPnpm(fake(0, '10.26.2\n'))).toEqual({
       kind: 'ok',
       version: '10.26.2',
     });
-    expect(await detectPnpm('/p', fake(0, '9.15.9\n'))).toEqual({ kind: 'old', version: '9.15.9' });
+    expect(await detectPnpm(fake(0, '9.15.9\n'))).toEqual({ kind: 'old', version: '9.15.9' });
+  });
+
+  it('treats pnpm 10 below 10.26 as old: it cannot switch itself to pnpm 12', async () => {
+    expect(await detectPnpm(fake(0, '10.25.0\n'))).toEqual({ kind: 'old', version: '10.25.0' });
+    expect(await detectPnpm(fake(0, '10.0.0\n'))).toEqual({ kind: 'old', version: '10.0.0' });
+    expect(await detectPnpm(fake(0, '10.26.2\n'))).toEqual({ kind: 'ok', version: '10.26.2' });
+    expect(await detectPnpm(fake(0, '11.0.0\n'))).toEqual({ kind: 'ok', version: '11.0.0' });
   });
 
   it('accepts pre-releases', async () => {
-    expect(await detectPnpm('/p', fake(0, '11.0.0-rc.1\n'))).toEqual({
+    expect(await detectPnpm(fake(0, '11.0.0-rc.1\n'))).toEqual({
       kind: 'ok',
       version: '11.0.0-rc.1',
     });
-    expect(await detectPnpm('/p', fake(0, '9.0.0-beta.2\n'))).toEqual({
+    expect(await detectPnpm(fake(0, '9.0.0-beta.2\n'))).toEqual({
       kind: 'old',
       version: '9.0.0-beta.2',
     });
   });
 
   it('is none when pnpm fails, is missing, or prints nonsense', async () => {
-    expect(await detectPnpm('/p', fake(127))).toEqual({ kind: 'none' });
-    expect(await detectPnpm('/p', fake(0, 'hello\n'))).toEqual({ kind: 'none' });
+    expect(await detectPnpm(fake(127))).toEqual({ kind: 'none' });
+    expect(await detectPnpm(fake(0, 'hello\n'))).toEqual({ kind: 'none' });
     const throwing: Exec = async () => {
       throw new Error('boom');
     };
-    expect(await detectPnpm('/p', throwing)).toEqual({ kind: 'none' });
+    expect(await detectPnpm(throwing)).toEqual({ kind: 'none' });
   });
 
-  it('runs from the given folder', async () => {
+  it('runs from the temp folder by default, or the given folder', async () => {
     const calls: unknown[] = [];
-    await detectPnpm('/parent', async (cmd, args, opts) => {
+    const exec: Exec = async (cmd, args, opts) => {
       calls.push([cmd, args, opts]);
       return { code: 0, stdout: '12.15.0', stderr: '' };
-    });
-    expect(calls).toEqual([['pnpm', ['--version'], { cwd: '/parent' }]]);
+    };
+    await detectPnpm(exec);
+    await detectPnpm(exec, '/parent');
+    expect(calls).toEqual([
+      ['pnpm', ['--version'], { cwd: tmpdir() }],
+      ['pnpm', ['--version'], { cwd: '/parent' }],
+    ]);
   });
 });
 
@@ -195,5 +209,44 @@ describe('defaultExec', () => {
   it('resolves 127 when the command does not exist', async () => {
     const result = await defaultExec('definitely-not-a-command-xyz', [], { cwd: cwd });
     expect(result.code).toBe(127);
+    expect(hasLiveChildren()).toBe(false);
+  });
+
+  // Windows: cmd.exe can't take this script's quotes, so taskkill /T has no automated test.
+  it.skipIf(process.platform === 'win32')(
+    'stopChildren stops a running child and what it started, and the exec resolves',
+    async () => {
+      // The child starts a grandchild that ignores SIGTERM, and prints its pid.
+      const script = `
+      const { spawn } = require('node:child_process');
+      const g = spawn(process.execPath, ['-e', 'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'], { stdio: 'ignore' });
+      console.log(g.pid);
+      setInterval(() => {}, 1000);`;
+      const running = defaultExec(process.execPath, ['-e', script], { cwd });
+      for (let i = 0; i < 100 && !hasLiveChildren(); i += 1)
+        await new Promise((d) => setTimeout(d, 20));
+      expect(hasLiveChildren()).toBe(true);
+      await new Promise((d) => setTimeout(d, 500));
+      expect(await stopChildren({ timeout: 5000, grace: 300 })).toBe(true);
+      const result = await running;
+      expect(result.code).not.toBe(0);
+      expect(hasLiveChildren()).toBe(false);
+      const grandchild = Number(result.stdout.trim());
+      expect(grandchild).toBeGreaterThan(0);
+      const alive = () => {
+        try {
+          process.kill(grandchild, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      expect(alive()).toBe(false);
+    },
+    15_000
+  );
+
+  it('stopChildren with nothing running resolves true at once', async () => {
+    expect(await stopChildren()).toBe(true);
   });
 });

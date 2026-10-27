@@ -11,6 +11,8 @@ import { CANCELLED, type Ui } from './ui.js';
 import {
   backUp,
   backupPath,
+  holdsCwd,
+  type InterruptOutcome,
   moveIntoPlace,
   onInterrupt,
   targetState,
@@ -50,6 +52,8 @@ export interface RunDeps {
   templateDir?: string;
   moveIntoPlace?: typeof moveIntoPlace;
   onInterrupt?: typeof onInterrupt;
+  /** The folder the user's shell stands in; a backup never renames it. */
+  cwd?: string;
 }
 
 /** A failure with the output lines that explain it. */
@@ -100,30 +104,45 @@ function lastLines(output: { stdout: string; stderr: string }): string[] {
 }
 
 type Phase =
-  | { at: 'working' | 'backing-up' | 'moved' }
+  | { at: 'working' | 'moved' }
+  | { at: 'backing-up'; inPlace: boolean }
   | { at: 'backed-up'; backup: string }
   | { at: 'moving'; backup?: string };
 
 /** The line a Ctrl-C prints: "nothing was written" holds only until the backup starts. */
-function cancelMessage(phase: Phase, plan: RunPlan): [string, string[]] {
+function cancelMessage(
+  phase: Phase,
+  plan: RunPlan,
+  temp: string,
+  outcome: InterruptOutcome
+): [string, string[]] {
   const { target } = plan;
+  const leftover = [
+    ...(outcome.removed
+      ? []
+      : [`Couldn't delete the temporary folder ${temp}: delete it yourself.`]),
+    ...(outcome.stopped ? [] : ['pnpm may still be running in it.']),
+  ];
   switch (phase.at) {
     case 'working':
-      return [CANCELLED, []];
-    case 'backing-up':
-      return [
-        `Cancelled. Your files are in ${target}, or in ${basename(backupPath(target, plan.now))} beside it.`,
-        [],
-      ];
+      return outcome.removed ? [CANCELLED, leftover] : ['Cancelled.', leftover];
+    case 'backing-up': {
+      const backup = basename(backupPath(target, plan.now));
+      const where = phase.inPlace
+        ? `Your files are in ${target}, in ${backup} beside it, or split between the two.`
+        : `Your files are in ${target}, or in ${backup} beside it.`;
+      return [`Cancelled. ${where}`, leftover];
+    }
     case 'backed-up':
-      return [`Cancelled. Your files are in ${phase.backup}.`, []];
+      return [`Cancelled. Your files are in ${phase.backup}.`, leftover];
     case 'moving': {
       const partial = `The new project in ${target} may be incomplete.`;
-      if (phase.backup) return [`Cancelled. Your files are in ${phase.backup}.`, [partial]];
-      return ['Cancelled while moving the project into place.', [partial]];
+      if (phase.backup)
+        return [`Cancelled. Your files are in ${phase.backup}.`, [partial, ...leftover]];
+      return ['Cancelled while moving the project into place.', [partial, ...leftover]];
     }
     case 'moved':
-      return [`Cancelled after the project was created in ${target}.`, []];
+      return [`Cancelled after the project was created in ${target}.`, leftover];
   }
 }
 
@@ -132,7 +151,15 @@ const firstLine = (error: unknown) =>
 
 /** Generates, installs and commits in a temporary folder, then moves it to `plan.target`. */
 export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<RunResult> {
-  const exec = deps.exec ?? defaultExec;
+  const baseExec = deps.exec ?? defaultExec;
+  // Once a signal arrives, the interrupt handler owns the exit: commands it stops never return.
+  let interrupted = false;
+  const never = new Promise<never>(() => undefined);
+  const exec: Exec = async (cmd, args, opts) => {
+    if (interrupted) return never;
+    const result = await baseExec(cmd, args, opts);
+    return interrupted ? never : result;
+  };
   const from = deps.templateDir ?? templateDir();
   const parent = dirname(plan.target);
   const name = basename(plan.target);
@@ -140,10 +167,13 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
   // What a Ctrl-C has to report changes once the user's folder is moved aside or ours moves in.
   let phase: Phase = { at: 'working' };
   const unregister = (deps.onInterrupt ?? onInterrupt)(temp, {
-    exit: (code) => {
+    onStart: () => {
+      interrupted = true;
+    },
+    exit: (code, outcome) => {
       try {
         ui.stop();
-        const [title, lines] = cancelMessage(phase, plan);
+        const [title, lines] = cancelMessage(phase, plan, temp, outcome);
         ui.fail(title, lines);
       } finally {
         process.exit(code);
@@ -186,7 +216,7 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     }
 
     const pin = pnpmSpec(await readFile(join(from, 'package.json'), 'utf8')).slice('pnpm@'.length);
-    const pnpm = await detectPnpm(parent, exec);
+    const pnpm = await detectPnpm(exec);
     const command = installCommand(pnpm, temp, !plan.install);
     let installed = false;
     let seconds = 0;
@@ -251,8 +281,9 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
 
     let backup: string | undefined;
     if (plan.replace && (await targetState(plan.target)) === 'not-empty') {
-      phase = { at: 'backing-up' };
-      backup = await backUp(plan.target, plan.now);
+      const cwd = deps.cwd ?? process.cwd();
+      phase = { at: 'backing-up', inPlace: await holdsCwd(plan.target, cwd) };
+      backup = await backUp(plan.target, plan.now, { cwd });
       phase = { at: 'backed-up', backup };
       ui.step(`Moved the old ${name} to ${basename(backup)}`);
     }

@@ -30,6 +30,8 @@ it('the published tarball keeps every template file', () => {
     expect(missing).toEqual([]);
     expect(listed.has('package/dist/cli.js')).toBe(true);
     expect(listed.has('package/dist/THIRD_PARTY_NOTICES.txt')).toBe(true);
+    expect(listed.has('package/LICENSE')).toBe(true);
+    expect(listed.has('package/README.md')).toBe(true);
   } finally {
     rmSync(out, { recursive: true, force: true });
   }

@@ -61,6 +61,7 @@ describe('generate', () => {
     expect(existsSync(join(to, '_gitignore'))).toBe(false);
     expect(existsSync(join(to, 'scripts/check-examples.mjs'))).toBe(false);
     expect(existsSync(join(to, 'scripts/check-examples.test.ts'))).toBe(false);
+    expect(existsSync(join(to, 'scripts'))).toBe(false);
     for (const [file, text] of textFiles(to)) {
       if (file !== 'pnpm-lock.yaml') expect(text, file).not.toContain('@monorepo');
       expect(text, file).not.toContain('example:');
@@ -74,6 +75,14 @@ describe('generate', () => {
     expect(readme).toContain('cd my-tools');
     expect(readme).toContain('yourusername/my-tools.git');
     expect(readme).not.toContain('ts-monorepo-starter');
+  });
+
+  it('keeps scripts/ when it still holds other files', async () => {
+    const from = tempDir();
+    cpSync(templateDir(), from, { recursive: true });
+    writeFileSync(join(from, 'scripts', 'keep.mjs'), 'export {};\n');
+    const to = await run(['lib', 'cli', 'web'], join(tempDir(), 'out'), from);
+    expect(readdirSync(join(to, 'scripts'))).toEqual(['keep.mjs']);
   });
 
   it('keeps hooks executable', async () => {

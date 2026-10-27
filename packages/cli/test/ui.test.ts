@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, sep } from 'node:path';
 import { Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import type { RunPlan, RunResult } from '../src/run';
@@ -192,6 +192,24 @@ describe('plainUi', () => {
     const { ui, out } = capture();
     ui.outro(result, { ...plan, target: process.cwd() });
     expect(out()).toContain('Next: pnpm build && pnpm test');
+  });
+
+  it('always starts with cd after a backup, even in the current folder', () => {
+    const { ui, out } = capture();
+    ui.outro(
+      { ...result, backup: `${process.cwd()}.backup-1` },
+      { ...plan, target: process.cwd() }
+    );
+    expect(out()).toContain(`Next: cd ${shellQuote(process.cwd())} && pnpm build && pnpm test`);
+    const other = capture();
+    other.ui.outro({ ...result, backup: 'x' }, plan);
+    expect(other.out()).toContain('Next: cd acme-tools && pnpm build && pnpm test');
+  });
+
+  it('puts ./ before a folder that starts with a dash', () => {
+    const { ui, out } = capture();
+    ui.outro(result, { ...plan, target: resolve('-tools') });
+    expect(out()).toContain(`Next: cd .${sep}-tools && pnpm build`);
   });
 });
 

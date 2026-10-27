@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process';
-import { constants } from 'node:os';
+import { type ChildProcess, spawn } from 'node:child_process';
+import { constants, tmpdir } from 'node:os';
 import { dirname, isAbsolute } from 'node:path';
 import { pnpmSpec } from './template.js';
 
@@ -41,7 +41,88 @@ function mergeEnv(env: Record<string, string | undefined> | undefined): NodeJS.P
   return merged;
 }
 
-/** Runs a command, collecting output; a spawn failure resolves with code 127. */
+// Children still running, so an interrupt can stop them (and what they started) before cleaning up.
+const live = new Set<ChildProcess>();
+
+/** True while a command started by `defaultExec` is still running. */
+export function hasLiveChildren(): boolean {
+  return live.size > 0;
+}
+
+const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+
+/** True once no process is left in the child's process group (POSIX), or the child closed (Windows). */
+function gone(child: ChildProcess, closed: Set<ChildProcess>): boolean {
+  if (process.platform === 'win32' || child.pid === undefined) return closed.has(child);
+  try {
+    process.kill(-child.pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
+
+function signalGroup(child: ChildProcess, signal: NodeJS.Signals) {
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    // Already gone.
+  }
+}
+
+export interface StopOptions {
+  /** How long to wait in all, in ms. */
+  timeout?: number;
+  /** How long SIGTERM gets before SIGKILL, in ms (POSIX). */
+  grace?: number;
+}
+
+/**
+ * Stops every running child and everything it started: SIGTERM to its process group, then SIGKILL
+ * after `grace` (POSIX), or `taskkill /T /F` (Windows). Resolves true once all are gone, false if
+ * some are still running after `timeout`.
+ */
+export async function stopChildren({
+  timeout = 5000,
+  grace = 1500,
+}: StopOptions = {}): Promise<boolean> {
+  const children = [...live];
+  if (children.length === 0) return true;
+  const closed = new Set<ChildProcess>();
+  for (const child of children) {
+    if (child.exitCode !== null || child.signalCode !== null) closed.add(child);
+    else child.once('close', () => closed.add(child));
+  }
+  if (process.platform === 'win32') {
+    for (const child of children) {
+      if (child.pid === undefined) continue;
+      spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], {
+        stdio: 'ignore',
+        windowsHide: true,
+      }).on('error', () => undefined);
+    }
+  } else {
+    for (const child of children) signalGroup(child, 'SIGTERM');
+  }
+  const started = Date.now();
+  let killed = process.platform === 'win32';
+  for (;;) {
+    if (children.every((child) => gone(child, closed))) return true;
+    const elapsed = Date.now() - started;
+    if (elapsed >= timeout) return false;
+    if (!killed && elapsed >= grace) {
+      killed = true;
+      for (const child of children) signalGroup(child, 'SIGKILL');
+    }
+    await pause(50);
+  }
+}
+
+/**
+ * Runs a command, collecting output; a spawn failure resolves with code 127. On POSIX the child
+ * leads its own process group (`detached`), so `stopChildren` can stop it and what it started.
+ */
 export const defaultExec: Exec = (cmd, args, { cwd, env }) =>
   new Promise((resolve) => {
     const options = {
@@ -53,7 +134,8 @@ export const defaultExec: Exec = (cmd, args, { cwd, env }) =>
     const child =
       process.platform === 'win32'
         ? spawn(windowsCommandLine(cmd, args), { ...options, shell: true })
-        : spawn(cmd, args, options);
+        : spawn(cmd, args, { ...options, detached: true });
+    live.add(child);
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => {
@@ -62,8 +144,12 @@ export const defaultExec: Exec = (cmd, args, { cwd, env }) =>
     child.stderr.on('data', (chunk) => {
       stderr += chunk;
     });
-    child.on('error', (error) => resolve({ code: 127, stdout, stderr: stderr + error.message }));
+    child.on('error', (error) => {
+      live.delete(child);
+      resolve({ code: 127, stdout, stderr: stderr + error.message });
+    });
     child.on('close', (code, signal) => {
+      live.delete(child);
       let exit = code ?? 128 + (signal ? (constants.signals[signal] ?? 0) : 0);
       // cmd.exe starts fine and reports a missing command as 9009, or 1 plus a message.
       if (
@@ -76,14 +162,21 @@ export const defaultExec: Exec = (cmd, args, { cwd, env }) =>
     });
   });
 
-/** Runs `pnpm --version` in `cwd`, which must be outside the project so pnpm doesn't switch versions. */
-export async function detectPnpm(cwd: string, exec: Exec = defaultExec): Promise<PnpmStatus> {
+/**
+ * Runs `pnpm --version` in `cwd`: by default the temp folder, outside any project whose
+ * `packageManager` would make pnpm switch versions. Below 10.26, pnpm can't switch itself to 12.
+ */
+export async function detectPnpm(
+  exec: Exec = defaultExec,
+  cwd: string = tmpdir()
+): Promise<PnpmStatus> {
   const result = await exec('pnpm', ['--version'], { cwd }).catch(() => null);
   if (result?.code !== 0) return { kind: 'none' };
   const version = result.stdout.split(/\r?\n/)[0]?.trim() ?? '';
-  const match = /^(\d+)\.\d+\.\d+(?:-[\w.]+)?$/.exec(version);
+  const match = /^(\d+)\.(\d+)\.\d+(?:-[\w.]+)?$/.exec(version);
   if (!match) return { kind: 'none' };
-  return { kind: Number(match[1]) < 10 ? 'old' : 'ok', version };
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  return { kind: major < 10 || (major === 10 && minor < 26) ? 'old' : 'ok', version };
 }
 
 /** The package manager that ran us, from `npm_config_user_agent`; unknown means npm. */

@@ -27,9 +27,9 @@ const usage = (message: string) => {
   return USAGE;
 };
 
-const nameProblem = (folder: string) => {
+const nameProblem = (folder: string, cwd?: string) => {
   try {
-    packageNameFromFolder(folder);
+    packageNameFromFolder(folder, cwd);
     return undefined;
   } catch (error) {
     return (error as Error).message;
@@ -130,6 +130,13 @@ export async function main(argv: string[], io: MainIo = {}): Promise<number> {
   const cwd = io.cwd ?? process.cwd();
   const interactive =
     !options.yes && (io.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY));
+  // A bad flag fails at once, before any question.
+  if (interactive) {
+    const problem =
+      (options.folder !== undefined ? nameProblem(options.folder, cwd) : undefined) ??
+      (options.scope !== undefined ? scopeProblem(options.scope) : undefined);
+    if (problem) return usage(problem);
+  }
   const now = new Date();
   const holder = (await gitIdentity(cwd)).name;
 

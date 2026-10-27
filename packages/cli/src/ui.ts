@@ -1,4 +1,4 @@
-import { isAbsolute, relative } from 'node:path';
+import { isAbsolute, relative, sep } from 'node:path';
 import { styleText } from 'node:util';
 import * as p from '@clack/prompts';
 import { EXAMPLES, type Example } from './args.js';
@@ -61,11 +61,16 @@ Examples
 npm needs -- before the options. Docs: README of the generated project.`;
 }
 
-/** The folder as `cd` wants it from here, or null when it is the current folder. */
-function cdPath(target: string): string | null {
+/**
+ * The folder as `cd` wants it from here, or null when it is the current folder. After a backup it
+ * is never null, and outside the current folder it is absolute: the shell's view may be stale.
+ */
+function cdPath(target: string, backedUp: boolean): string | null {
   const rel = relative(process.cwd(), target);
-  if (rel === '') return null;
-  return shellQuote(rel.startsWith('..') || isAbsolute(rel) ? target : rel);
+  if (rel === '' && !backedUp) return null;
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return shellQuote(target);
+  // `cd -x` would read the folder as an option.
+  return shellQuote(rel.startsWith('-') ? `.${sep}${rel}` : rel);
 }
 
 /** Quotes a path for the user's shell unless it is only safe characters. */
@@ -96,7 +101,7 @@ function closing(result: RunResult, plan: RunPlan) {
     !result.installed && result.pnpm.kind !== 'old'
       ? ["Dependencies aren't installed: the first pnpm install installs them and the git hooks."]
       : [];
-  const dir = cdPath(plan.target);
+  const dir = cdPath(plan.target, result.backup !== undefined);
   const next = [
     ...(dir ? [`cd ${dir}`] : []),
     ...(result.installed ? [] : ['pnpm install']),
