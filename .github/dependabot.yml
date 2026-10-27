@@ -21,7 +21,7 @@ updates:
         dependency-type: development
         update-types: [minor, patch]
     ignore:
-      # @types/node follows the Node major: 26 at the root (devEngines.runtime), 24 in packages (engines.node).
+      # @types/node follows the Node major: 26 at the root (devEngines.runtime), 22 in packages (engines.node).
       # Raise it by hand together with that Node version.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]

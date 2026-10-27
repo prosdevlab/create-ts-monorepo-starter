@@ -18,10 +18,11 @@ yarn create ts-monorepo-starter my-tools
 bun create ts-monorepo-starter my-tools
 ```
 
-The CLI asks for the folder, the npm scope and the examples, then copies the template, renames the scope, removes the
-examples you didn't pick, runs `git init`, installs, and makes the first commit (if git has no `user.name`/`user.email`, it stages
-the files and tells you instead). `-y` accepts every default and asks nothing, as does a run where stdin isn't a
-terminal; both need the folder argument, or the CLI stops with a usage error. A folder that already exists and isn't empty is
+The CLI asks for the folder, then "Use the recommended setup?"; only if you answer No does it ask for the npm scope, the
+examples, git and the install. Then it copies the template, renames the scope, removes the examples you didn't pick, runs
+`git init`, installs, and makes the first commit (if git has no `user.name`/`user.email`, it stages the files and tells
+you instead). `-y` accepts every default and asks nothing, as does a run where stdin or stdout isn't a terminal; both
+need the folder argument, or the CLI stops with a usage error. A folder that already exists and isn't empty is
 refused; `--force` moves it aside to `<folder>.backup-<date>` first. Nothing you own is deleted, and Ctrl-C before the
 final move leaves nothing behind; the CLI says what's left if you stop it later.
 
@@ -60,9 +61,8 @@ with any package manager:
 
 - pnpm 10.26 or newer switches itself to pnpm 12 for the project, so the install just works.
 - No pnpm: the CLI installs with `npm exec` and says that commits need pnpm, with the command to install it.
-- pnpm 10.0 to 10.25: used as is, and untested.
-- pnpm 9 or older: the CLI stops before installing and prints the upgrade command, because pnpm 9 would ignore the
-  pinned pnpm and rewrite the lockfile.
+- pnpm older than 10.26: the CLI stops before installing and prints the upgrade command, because such a pnpm can't
+  switch itself to pnpm 12 (pnpm 9 would also ignore the pinned pnpm and rewrite the lockfile).
 
 ## Template version
 
@@ -220,7 +220,13 @@ The package publishes with **npm trusted publishing**: GitHub Actions proves its
 The release workflow never publishes until the repository variable `NPM_PUBLISH` is `true`, so nothing publishes by accident. To publish:
 
 1. The package is named `create-ts-monorepo-starter` and its `repository` field points at this repository, because npm provenance checks it against the publishing repository.
-2. On npmjs.com, open the package's **Settings → Trusted publishing** and add a GitHub Actions publisher: `prosdevlab`, `create-ts-monorepo-starter`, workflow file `ci.yml`, environment `npm`. (Publishing runs in `release.yml`, which `ci.yml` calls, and npm checks the calling workflow.) A new trusted publisher must complete its first publish within 2 days. If npm won't let you configure a package that doesn't exist yet, publish the first version by hand (`npm publish --access public`, with two-factor authentication), then add the publisher.
+2. On npmjs.com, open the package's **Settings → Trusted publishing** and add a GitHub Actions publisher: `prosdevlab`, `create-ts-monorepo-starter`, workflow file `ci.yml`, environment `npm`. (Publishing runs in `release.yml`, which `ci.yml` calls, and npm checks the calling workflow.) A new trusted publisher must complete its first publish within 2 days.
+
+   If npm won't create a trusted publisher for a package that doesn't exist yet, publish a placeholder first, never the real release:
+
+   1. From a clean, built checkout (`pnpm install --frozen-lockfile && pnpm build`), set `"version": "0.0.0"` in `packages/cli/package.json` (don't commit it).
+   2. In `packages/cli`, run `npm publish --access public` with two-factor authentication, then restore the version (`git checkout packages/cli/package.json`).
+   3. Add the trusted publisher as above: repository `prosdevlab/create-ts-monorepo-starter`, workflow `ci.yml`, environment `npm`. Then do steps 3 and 4 below, and merge the version PR: CI publishes the real release.
 3. In the same settings, under **Publishing access**, choose **Require two-factor authentication and disallow tokens**. Trusted publishing keeps working; a leaked token can't publish.
 4. In GitHub, under **Settings → Actions → General**, enable **Allow GitHub Actions to create and approve pull requests**, so the workflow can open the version PR. Then set the repository variable `NPM_PUBLISH` to `true` (**Settings → Secrets and variables → Actions → Variables**). Optionally, add required reviewers to the `npm` environment (**Settings → Environments**) to approve each publish.
 
