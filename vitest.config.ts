@@ -7,7 +7,8 @@ export default defineConfig({
     restoreMocks: true,
     include: ['packages/**/*.{test,spec}.ts'],
     // dist/ holds the bundled template with its own tests; build/ is tsc output.
-    exclude: ['**/node_modules/**', '**/dist/**', '**/build/**'],
+    // test/e2e generates real projects (slow, online): `pnpm test:e2e` runs it.
+    exclude: ['**/node_modules/**', '**/dist/**', '**/build/**', 'packages/cli/test/e2e/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
