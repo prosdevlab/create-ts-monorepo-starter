@@ -334,6 +334,36 @@ describe('run', () => {
     expect(ui.calls).toContain('step: Moved the old my-tools to my-tools.backup-20261027-000000');
   });
 
+  it('backs up the current folder entry by entry, so it keeps its path', async () => {
+    const target = join(root, 'my-tools');
+    mkdirSync(join(target, 'src'), { recursive: true });
+    writeFileSync(join(target, 'notes.txt'), 'keep me');
+    const ui = recordingUi();
+    const moveIntoPlace: RunDeps['moveIntoPlace'] = async (temp, to) => {
+      log.push('move');
+      // The real moveIntoPlace moves entries into an empty target; the folder must still exist.
+      expect(await readdir(to)).toEqual([]);
+      for (const entry of await readdir(temp)) await rename(join(temp, entry), join(to, entry));
+      rmSync(temp, { recursive: true });
+    };
+    const result = await run(plan({ replace: true }), ui, deps({ cwd: target, moveIntoPlace }));
+    const backup = `${target}.backup-20261027-000000`;
+    expect(result.backup).toBe(backup);
+    expect((await readdir(backup)).sort()).toEqual(['notes.txt', 'src']);
+    expect(await readdir(target)).toEqual(['package.json', 'pnpm-lock.yaml']);
+  });
+
+  it('runs pnpm --version in the temp folder, outside any project', async () => {
+    const cwds: string[] = [];
+    const base = fakeExec();
+    const exec: Exec = async (cmd, args, opts) => {
+      if (cmd === 'pnpm' && args[0] === '--version') cwds.push(opts.cwd);
+      return base(cmd, args, opts);
+    };
+    await run(plan(), recordingUi(), deps({ exec }));
+    expect(cwds).toEqual([tmpdir()]);
+  });
+
   it('never touches a non-empty target without replace', async () => {
     const target = join(root, 'my-tools');
     mkdirSync(target);
@@ -346,7 +376,8 @@ describe('run', () => {
   });
 
   describe('on Ctrl-C', () => {
-    type Exit = (code: number) => void;
+    type Exit = (code: number, outcome: { removed: boolean; stopped: boolean }) => void;
+    const CLEAN = { removed: true, stopped: true };
     let interrupt: Exit | undefined;
     const catching = (overrides: Partial<RunDeps> = {}) =>
       deps({
@@ -364,7 +395,7 @@ describe('run', () => {
     it('says nothing was written before the backup starts', async () => {
       const ui = recordingUi();
       const generate: RunDeps['generate'] = async () => {
-        interrupt?.(130);
+        interrupt?.(130, CLEAN);
         throw new Error('stop here');
       };
       await expect(run(plan(), ui, catching({ generate }))).rejects.toThrow('stop here');
@@ -378,7 +409,7 @@ describe('run', () => {
       writeFileSync(join(target, 'notes.txt'), 'keep me');
       const ui = recordingUi();
       const moveIntoPlace: RunDeps['moveIntoPlace'] = async () => {
-        interrupt?.(130);
+        interrupt?.(130, CLEAN);
       };
       await run(plan({ replace: true }), ui, catching({ moveIntoPlace }));
       const backup = `${target}.backup-20261027-000000`;
@@ -390,10 +421,55 @@ describe('run', () => {
       expect(process.exit).toHaveBeenCalledWith(130);
     });
 
+    it('names the temp folder when it could not be deleted, and a pnpm that would not stop', async () => {
+      const ui = recordingUi();
+      const generate: RunDeps['generate'] = async () => {
+        interrupt?.(130, { removed: false, stopped: false });
+        throw new Error('stop here');
+      };
+      await expect(run(plan(), ui, catching({ generate }))).rejects.toThrow('stop here');
+      const last = ui.calls.at(-1) ?? '';
+      expect(last).toMatch(
+        /^fail: Cancelled\. \| Couldn't delete the temporary folder .*\.my-tools\.tmp-[0-9a-f]{8}: delete it yourself\. \| pnpm may still be running in it\.$/
+      );
+      expect(last).not.toContain('Nothing was written');
+    });
+
+    it('never returns from a command once a signal arrived', async () => {
+      let start: (() => void) | undefined;
+      const ui = recordingUi();
+      const exec = fakeExec({
+        'pnpm install': async () => {
+          start?.();
+          return { code: 143 };
+        },
+      });
+      const running = run(
+        plan(),
+        ui,
+        deps({
+          exec,
+          onInterrupt: (_temp, options) => {
+            start = options?.onStart;
+            return () => undefined;
+          },
+        })
+      );
+      const settled = await Promise.race([
+        running.then(
+          () => 'resolved',
+          () => 'rejected'
+        ),
+        new Promise((done) => setTimeout(() => done('pending'), 100)),
+      ]);
+      expect(settled).toBe('pending');
+      expect(ui.calls.some((call) => call.startsWith('fail:'))).toBe(false);
+    });
+
     it('does not claim nothing was written after the move', async () => {
       const ui = recordingUi();
       await run(plan(), ui, catching());
-      interrupt?.(130);
+      interrupt?.(130, CLEAN);
       expect(ui.calls.at(-1)).toBe(
         `fail: Cancelled after the project was created in ${join(root, 'my-tools')}.`
       );
@@ -405,7 +481,7 @@ describe('run', () => {
         throw new Error('write EPIPE');
       };
       const generate: RunDeps['generate'] = async () => {
-        expect(() => interrupt?.(130)).toThrow('EPIPE');
+        expect(() => interrupt?.(130, CLEAN)).toThrow('EPIPE');
         throw new Error('stop here');
       };
       await expect(run(plan(), ui, catching({ generate }))).rejects.toThrow('stop here');

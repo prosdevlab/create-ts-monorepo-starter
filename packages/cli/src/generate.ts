@@ -1,4 +1,4 @@
-import { cp, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, open, readdir, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { EXAMPLES, type Example } from './args.js';
 import { applyMarkers, commentStyle } from './markers.js';
@@ -86,6 +86,10 @@ export async function generate(input: GenerateInput): Promise<void> {
   const removed = EXAMPLES.filter((example) => !keep.includes(example));
   const doomed = [...removed.flatMap((example) => EXAMPLE_DIRS[example]), ...TEMPLATE_ONLY_FILES];
   for (const path of doomed) await rm(join(to, path), { recursive: true, force: true });
+  // The template-only files may have been all of scripts/.
+  const scripts = join(to, 'scripts');
+  const left = await readdir(scripts).catch(() => null);
+  if (left?.length === 0) await rmdir(scripts);
 
   const remove = new Set<string>(removed);
   const identity = identityEdits(input);

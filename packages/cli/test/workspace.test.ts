@@ -7,12 +7,14 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { rename as fsRename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   backUp,
   backupPath,
+  holdsCwd,
   moveIntoPlace,
   onInterrupt,
   targetState,
@@ -217,30 +219,222 @@ describe('backUp', () => {
     expect(readFileSync(join(backupPath(target, now), 'f'), 'utf8')).toBe('old');
     expect(readFileSync(join(backup, 'f'), 'utf8')).toBe('new');
   });
+
+  const now = new Date(2026, 9, 27, 10, 42, 5);
+  const project = () => {
+    const target = join(root, 'proj');
+    put(target, 'src/a.ts', 'a');
+    put(target, '.git/HEAD', 'ref: refs/heads/main\n');
+    put(target, 'notes.txt', 'n');
+    return target;
+  };
+
+  it('moves the entries, not the folder, when the target is the current folder', async () => {
+    const target = project();
+    const backup = await backUp(target, now, { cwd: target });
+    expect(backup).toBe(backupPath(target, now));
+    expect(existsSync(target)).toBe(true);
+    expect(readdirSync(target)).toEqual([]);
+    expect(readdirSync(backup).sort()).toEqual(['.git', 'notes.txt', 'src']);
+    expect(readFileSync(join(backup, '.git/HEAD'), 'utf8')).toBe('ref: refs/heads/main\n');
+  });
+
+  it('moves the entries, not the folder, when the target holds the current folder', async () => {
+    const target = project();
+    const backup = await backUp(target, now, { cwd: join(target, 'src') });
+    expect(existsSync(target)).toBe(true);
+    expect(readdirSync(target)).toEqual([]);
+    expect(readFileSync(join(backup, 'src/a.ts'), 'utf8')).toBe('a');
+  });
+
+  it('renames the whole folder when the current folder is elsewhere', async () => {
+    const target = project();
+    const renames: [string, string][] = [];
+    const rename = (async (from: string, to: string) => {
+      renames.push([from, to]);
+      await fsRename(from, to);
+    }) as never;
+    const backup = await backUp(target, now, { cwd: root, rename });
+    expect(renames).toEqual([[target, backup]]);
+    expect(existsSync(target)).toBe(false);
+    // A sibling whose name only starts the same is not inside.
+    const sibling = project();
+    await backUp(sibling, now, { cwd: `${sibling}-other`, rename });
+    expect(existsSync(sibling)).toBe(false);
+  });
+
+  it('retries a refused rename with the same schedule as moveIntoPlace', async () => {
+    const target = project();
+    const sleeps: number[] = [];
+    let calls = 0;
+    const rename = (async (from: string, to: string) => {
+      calls += 1;
+      if (calls <= 2) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+      await fsRename(from, to);
+    }) as never;
+    const sleep = async (ms: number) => {
+      sleeps.push(ms);
+    };
+    await backUp(target, now, { cwd: root, rename, sleep });
+    expect(sleeps).toEqual([100, 200]);
+
+    // EACCES is retried only on win32.
+    const again = project();
+    const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    sleeps.length = 0;
+    const refuse = (async () => {
+      throw eacces;
+    }) as never;
+    await expect(
+      backUp(again, now, { cwd: root, rename: refuse, sleep, platform: 'linux' })
+    ).rejects.toBe(eacces);
+    expect(sleeps).toEqual([]);
+    await expect(
+      backUp(again, now, { cwd: root, rename: refuse, sleep, platform: 'win32' })
+    ).rejects.toBe(eacces);
+    expect(sleeps).toEqual([100, 200, 400, 800, 1600]);
+  });
+
+  it('stops at the first refused entry and says where the files are, deleting nothing', async () => {
+    const target = project();
+    let calls = 0;
+    const rename = (async (from: string, to: string) => {
+      calls += 1;
+      if (calls === 2) throw Object.assign(new Error('nope'), { code: 'ENOTEMPTY' });
+      await fsRename(from, to);
+    }) as never;
+    const backup = backupPath(target, now);
+    const error = await backUp(target, now, { cwd: target, rename }).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain(`Couldn't move the old files aside`);
+    expect(message).toContain(backup);
+    expect(message).toContain(target);
+    const left = readdirSync(target);
+    const moved = readdirSync(backup);
+    expect(left.length + moved.length).toBe(3);
+    expect(moved).toHaveLength(1);
+  });
+});
+
+describe('holdsCwd', () => {
+  it('is true for the folder itself and its ancestors only', async () => {
+    const target = join(root, 'proj');
+    mkdirSync(join(target, 'a'), { recursive: true });
+    mkdirSync(join(root, 'proj-2'));
+    mkdirSync(join(target, '..cache'));
+    expect(await holdsCwd(target, target)).toBe(true);
+    expect(await holdsCwd(target, join(target, 'a'))).toBe(true);
+    expect(await holdsCwd(target, root)).toBe(false);
+    expect(await holdsCwd(target, join(root, 'proj-2'))).toBe(false);
+    expect(await holdsCwd(join(target, 'a'), target)).toBe(false);
+  });
 });
 
 describe('onInterrupt', () => {
+  type Outcome = { removed: boolean; stopped: boolean };
+  const listen = (temp: string, extra: Record<string, unknown> = {}) => {
+    const exits: [number, Outcome][] = [];
+    const off = onInterrupt(temp, {
+      exit: (code, outcome) => exits.push([code, outcome]),
+      live: () => false,
+      ...extra,
+    });
+    return { exits, off };
+  };
+
   it('removes the temp folder and exits 130', () => {
     const temp = join(root, '.t');
     put(temp, 'f', 'x');
-    const codes: number[] = [];
-    const off = onInterrupt(temp, { exit: (code) => codes.push(code) });
+    const { exits, off } = listen(temp);
     try {
       process.emit('SIGINT');
       expect(existsSync(temp)).toBe(false);
-      expect(codes).toEqual([130]);
+      expect(exits).toEqual([[130, { removed: true, stopped: true }]]);
+    } finally {
+      off();
+    }
+  });
+
+  it('handles SIGTERM and SIGHUP the same way, once', () => {
+    const temp = join(root, '.t');
+    put(temp, 'f', 'x');
+    const { exits, off } = listen(temp);
+    try {
+      process.emit('SIGHUP');
+      process.emit('SIGTERM');
+      expect(existsSync(temp)).toBe(false);
+      expect(exits).toEqual([[130, { removed: true, stopped: true }]]);
+    } finally {
+      off();
+    }
+  });
+
+  it('stops running children first, then removes the folder they wrote to', async () => {
+    const temp = join(root, '.t');
+    put(temp, 'f', 'x');
+    const order: string[] = [];
+    let release: (stopped: boolean) => void = () => undefined;
+    const { exits, off } = listen(temp, {
+      live: () => true,
+      stop: () =>
+        new Promise<boolean>((done) => {
+          order.push('stop');
+          release = (stopped) => {
+            // A child that was still writing until it stopped.
+            put(temp, 'late', 'y');
+            done(stopped);
+          };
+        }),
+      onStart: () => order.push('start'),
+    });
+    try {
+      process.emit('SIGTERM');
+      expect(order).toEqual(['start', 'stop']);
+      expect(exits).toEqual([]);
+      release(true);
+      await new Promise((done) => setTimeout(done, 10));
+      expect(existsSync(temp)).toBe(false);
+      expect(exits).toEqual([[130, { removed: true, stopped: true }]]);
+    } finally {
+      off();
+    }
+  });
+
+  it('reports a child that would not stop', async () => {
+    const temp = join(root, '.t');
+    const { exits, off } = listen(temp, { live: () => true, stop: async () => false });
+    try {
+      process.emit('SIGINT');
+      await new Promise((done) => setTimeout(done, 10));
+      expect(exits).toEqual([[130, { removed: true, stopped: false }]]);
+    } finally {
+      off();
+    }
+  });
+
+  it('reports a temp folder it could not remove', () => {
+    const temp = join(root, '.t');
+    put(temp, 'f', 'x');
+    const { exits, off } = listen(temp, {
+      remove: () => {
+        throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+      },
+    });
+    try {
+      process.emit('SIGINT');
+      expect(exits).toEqual([[130, { removed: false, stopped: true }]]);
     } finally {
       off();
     }
   });
 
   it('stops listening once unregistered', () => {
-    const before = { int: process.listenerCount('SIGINT'), term: process.listenerCount('SIGTERM') };
+    const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+    const before = signals.map((s) => process.listenerCount(s));
     const off = onInterrupt(join(root, '.t'), { exit: () => undefined });
-    expect(process.listenerCount('SIGINT')).toBe(before.int + 1);
-    expect(process.listenerCount('SIGTERM')).toBe(before.term + 1);
+    expect(signals.map((s) => process.listenerCount(s))).toEqual(before.map((n) => n + 1));
     off();
-    expect(process.listenerCount('SIGINT')).toBe(before.int);
-    expect(process.listenerCount('SIGTERM')).toBe(before.term);
+    expect(signals.map((s) => process.listenerCount(s))).toEqual(before);
   });
 });

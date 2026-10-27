@@ -35,6 +35,8 @@ async function groupGone(pid: number) {
   throw new Error(`process group ${pid} is still running`);
 }
 
+const settle = () => new Promise((done) => setTimeout(done, 3000));
+
 describe('interrupting and replacing', () => {
   // Windows has no SIGINT to send to another process; a terminal's Ctrl-C reaches the whole group.
   it.skipIf(process.platform === 'win32')(
@@ -57,10 +59,50 @@ describe('interrupting and replacing', () => {
       child.stderr.resume();
       const code = await new Promise<number | null>((done) => child.on('close', done));
       await groupGone(child.pid as number);
+      // pnpm runs in its own process group: give anything still running time to write.
+      await settle();
       expect(sent, stdout).toBe(true);
       expect(code).toBe(130);
       expect(existsSync(join(box.work, 'p-int'))).toBe(false);
       expect(leftovers('p-int')).toEqual([]);
+    },
+    120_000
+  );
+
+  // How timeouts, `timeout` and process managers stop a program: a signal to its pid alone.
+  it.skipIf(process.platform === 'win32')(
+    'SIGTERM to the CLI alone during the install stops pnpm and leaves nothing',
+    async () => {
+      // An empty pnpm store and cache, so the install is slow enough to still be running.
+      const fresh = (name: string) => join(box.work, '..', name);
+      const env = {
+        ...box.env,
+        XDG_DATA_HOME: fresh('data'),
+        XDG_CACHE_HOME: fresh('cache'),
+        XDG_STATE_HOME: fresh('state'),
+      };
+      const child = spawn(process.execPath, [bin, 'p-term', '-y'], { cwd: box.work, env });
+      let stdout = '';
+      let stderr = '';
+      let sent = false;
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk;
+        if (!sent && stdout.includes('Installing')) {
+          sent = true;
+          // Let pnpm get going first, so there is something to stop.
+          setTimeout(() => child.kill('SIGTERM'), 3000);
+        }
+      });
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+      });
+      const code = await new Promise<number | null>((done) => child.on('close', done));
+      await settle();
+      expect(sent, stdout).toBe(true);
+      expect(code, stderr).toBe(130);
+      expect(stderr).toContain('Cancelled. Nothing was written.');
+      expect(existsSync(join(box.work, 'p-term'))).toBe(false);
+      expect(leftovers('p-term')).toEqual([]);
     },
     120_000
   );
