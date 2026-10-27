@@ -73,8 +73,8 @@ Every choice has a default good enough that the maintainer would accept it uncha
 
 | Choice | Default | Flag | Notes |
 | --- | --- | --- | --- |
-| Project folder | `my-ts-monorepo` (prompted) | first argument | Must be a valid npm name once lowercased |
-| npm scope | `@<folder name>` | `--scope @acme` | Sanitized to lowercase and dashes; nothing publishes until `NPM_PUBLISH` is set |
+| Project folder | `my-ts-monorepo` (prompted) | first argument | Becomes the package name, unsafe characters turned into `-` (`My Tools` becomes `my-tools`); rejected only if nothing valid remains. Required with `-y` or without a terminal; the default is the prompt's placeholder |
+| npm scope | `@<folder name>` | `--scope @acme` | Lowercased, `@` added if missing; letters, digits, `-`, `.` and `_` only (the default is `@` + the folder's package name); nothing publishes until `NPM_PUBLISH` is set |
 | Examples | all: `lib`, `cli`, `web` | `--examples lib,cli` | At least one; `lib` always keeps `shared` |
 | git | init + first commit | `--no-git` | Skipped when already inside a git repo |
 | Install | yes | `--no-install` | See "Installing on any machine" |

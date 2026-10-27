@@ -19,10 +19,11 @@ bun create ts-monorepo-starter my-tools
 ```
 
 The CLI asks for the folder, the npm scope and the examples, then copies the template, renames the scope, removes the
-examples you didn't pick, runs `git init`, installs, and makes the first commit. `-y` accepts every default and asks
-nothing, which is also what happens when stdin isn't a terminal. A folder that already exists and isn't empty is
-refused; `--force` moves it aside to `<folder>.backup-<date>` first. Nothing you own is deleted, and Ctrl-C leaves
-nothing behind.
+examples you didn't pick, runs `git init`, installs, and makes the first commit (if git has no `user.name`/`user.email`, it stages
+the files and tells you instead). `-y` accepts every default and asks nothing, as does a run where stdin isn't a
+terminal; both need the folder argument, or the CLI stops with a usage error. A folder that already exists and isn't empty is
+refused; `--force` moves it aside to `<folder>.backup-<date>` first. Nothing you own is deleted, and Ctrl-C before the
+final move leaves nothing behind; the CLI says what's left if you stop it later.
 
 With npm, put `--` before the options: `npm create ts-monorepo-starter@latest my-tools -- --examples lib,cli`.
 
@@ -30,8 +31,8 @@ With npm, put `--` before the options: `npm create ts-monorepo-starter@latest my
 
 | Flag | What it does | Default |
 | --- | --- | --- |
-| `[folder]` (first argument) | The project folder; must be a valid npm name once lowercased | `my-ts-monorepo` (prompted) |
-| `--scope <@name>` | npm scope for the packages, sanitized to lowercase and dashes | `@<folder>` |
+| `[folder]` (first argument) | The project folder; it becomes the package name, with unsafe characters turned into `-` (`My Tools` becomes `my-tools`), and is rejected only if nothing valid remains | none with `-y` or without a terminal; `my-ts-monorepo` is only the prompt's placeholder |
+| `--scope <@name>` | npm scope; lowercased, `@` added if missing; letters, digits, `-`, `.` and `_` only | `@` + the folder's package name |
 | `--examples <list>` | `lib`, `cli`, `web`, comma-separated; at least one | all three |
 | `--no-git` | Don't initialize git (skipped anyway inside a git repository) | git init and a first commit |
 | `--no-install` | Don't install dependencies; the lockfile is still updated | install |
@@ -59,6 +60,7 @@ with any package manager:
 
 - pnpm 10.26 or newer switches itself to pnpm 12 for the project, so the install just works.
 - No pnpm: the CLI installs with `npm exec` and says that commits need pnpm, with the command to install it.
+- pnpm 10.0 to 10.25: used as is, and untested.
 - pnpm 9 or older: the CLI stops before installing and prints the upgrade command, because pnpm 9 would ignore the
   pinned pnpm and rewrite the lockfile.
 
@@ -176,7 +178,9 @@ built CLI and runs each project's own CI. `E2E_SUBSETS=lib,cli` limits it to tho
 The template version is pinned in `packages/cli/template-version.json` (tag and commit). The weekly
 `template-main.yml` workflow fails when the template has a newer release, with `Template vX.Y.Z is out; update
 packages/cli/template-version.json`, and tests the CLI against the template's `main` branch. To take a new release,
-update `tag` and `commit` in a PR: its CI rebuilds and re-tests the bundle.
+update `tag` and `commit` in a PR: its CI rebuilds and re-tests the bundle. GitHub disables scheduled workflows in a
+public repository after 60 days without repository activity, and failed scheduled runs notify the person who last
+edited the cron, so re-enable and check `template-main.yml` if the repository goes quiet.
 
 #### Making Changes
 
