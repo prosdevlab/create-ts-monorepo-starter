@@ -10,7 +10,7 @@ A modern TypeScript monorepo using pnpm workspaces, Turborepo for build orchestr
 
 - Package manager: pnpm 12.15.0 (pinned via `packageManager`)
 - Language: TypeScript 7.0.2, with a Node 22 preset in `packages/cli` (`@tsconfig/node22`)
-- Build: `tsc`
+- Build: `tsc`, then Rollup
 - Build system: Turborepo
 - Linter/Formatter: Biome
 - Testing: Vitest 5 (run from root)
@@ -164,7 +164,7 @@ Copy `packages/cli/` and rename it.
 
 Every package keeps these, or `pnpm check:packages` fails or it publishes broken:
 
-- a `build` script that runs `pnpm run clean` (which deletes `dist`) and then `tsc -p tsconfig.json`. Scripts use `node -e`
+- a `build` script that runs `pnpm run clean` (which deletes `dist` and `build`), `tsc` into `build/`, Rollup into `dist/cli.js`, and the template fetch into `dist/template`. Scripts use `node -e`
   instead of `rm` or `chmod`, so they also run on Windows
 - `"engines": { "node": ">=22.13" }` for packages that run on Node, and `@types/node` 22.x if the package needs it
 - `"type": "module"` and a `bin` that points into `dist/` (no `exports` map: this is a bin-only package)
@@ -270,7 +270,7 @@ pnpm list --depth 0  # See all workspace packages
 
 **A package builds but `dist/` is empty or stale:**
 
-- The build script deletes `dist` and runs `tsc` without `composite`. Don't re-add `composite` or `incremental`: with them, `tsc` can skip writing output after `dist` is deleted.
+- The build script deletes `dist` and `build` and runs `tsc` without `composite`. Don't re-add `composite` or `incremental`: with them, `tsc` can skip writing output after `build` is deleted.
 
 **`ERR_PNPM_IGNORED_BUILDS`:**
 

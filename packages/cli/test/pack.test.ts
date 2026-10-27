@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,11 +10,12 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 it('the published tarball keeps every template file', () => {
   const out = mkdtempSync(join(tmpdir(), 'pack-test-'));
   try {
-    execFileSync('pnpm', ['pack', '--pack-destination', out], { cwd: root, stdio: 'pipe' });
-    const tarball = execFileSync('node', ['-e', "console.log(fs.readdirSync('.')[0])"], {
-      cwd: out,
-      encoding: 'utf8',
-    }).trim();
+    execFileSync('pnpm', ['pack', '--pack-destination', out], {
+      cwd: root,
+      stdio: 'pipe',
+      shell: process.platform === 'win32',
+    });
+    const [tarball] = readdirSync(out);
     const listed = new Set(
       execFileSync('tar', ['-tzf', join(out, tarball)], { encoding: 'utf8' })
         .split('\n')
