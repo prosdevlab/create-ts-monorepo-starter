@@ -45,12 +45,6 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      # example:template-only
-      # Keeps every example's lines between its markers, so an example can be removed cleanly.
-      - name: Check examples
-        run: node scripts/check-examples.mjs
-      # /example:template-only
-
       # Unused files, exports and dependencies, and dependencies used but not declared (knip).
       - name: Unused code
         run: pnpm check:unused
@@ -68,31 +62,6 @@ jobs:
       - name: Package checks
         run: pnpm check:packages
 
-      # example:web
-      - name: Size budget
-        run: pnpm size
-
-      # Cache Playwright's browser per Playwright version, so CI downloads it once, not every run.
-      - name: Get Playwright version
-        id: playwright
-        run: echo "version=$(pnpm --filter @monorepo/web exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Playwright browser
-        id: playwright-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-
-      # Headless tests only need Chromium's headless shell; the runner image already has its system libraries.
-      - name: Install Playwright browser
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: pnpm --filter @monorepo/web exec playwright install --only-shell chromium
-
-      - name: Browser tests
-        run: pnpm test:browser
-      # /example:web
-
   # Runs the unit tests on every Node.js major the packages support (engines.node), on Linux, macOS and Windows.
   compat:
     name: test (node ${{ matrix.node }}, ${{ matrix.os }})
@@ -100,7 +69,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [24, 26]
+        node: [22, 24, 26]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -142,7 +111,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Without Advanced Security, findings fail the job, and private copies of the template work the same way.
+      # Without Advanced Security, findings fail the job, and private copies work the same way.
       - name: Run zizmor
         uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
         with:

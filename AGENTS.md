@@ -1,46 +1,29 @@
 # AGENTS.md
 
-This is a TypeScript monorepo starter template: create a repository from it, then customize. `CLAUDE.md` imports this file, so these instructions are the single source for every agent.
+This repository builds `create-ts-monorepo-starter`, a CLI that generates TypeScript monorepos from the [ts-monorepo-starter](https://github.com/prosdevlab/ts-monorepo-starter) template: `pnpm create ts-monorepo-starter my-tools` (also `npm create`, `yarn create`, `bun create`). The command is still being built; the design and plans are in `docs/`. The repository itself was created from that template and keeps its toolchain. `CLAUDE.md` imports this file, so these instructions are the single source for every agent.
 
 ## Project Overview
 
-A modern TypeScript monorepo using pnpm workspaces, Turborepo for build orchestration, Biome for linting/formatting, Vitest for testing, and Changesets for versioning. Nothing publishes until a repository opts in with a repository variable: `NPM_PUBLISH` for npm, `PKG_PR_NEW` for PR previews. A copy of the template publishes nothing by accident.
+A modern TypeScript monorepo using pnpm workspaces, Turborepo for build orchestration, Biome for linting/formatting, Vitest for testing, and Changesets for versioning. Nothing publishes until a repository opts in with a repository variable: `NPM_PUBLISH` for npm, `PKG_PR_NEW` for PR previews. Nothing publishes by accident.
 
 **Tech Stack:**
 
 - Package manager: pnpm 12.15.0 (pinned via `packageManager`)
-- Language: TypeScript 7.0.2, with a Node 24 preset (`tsconfig.json`)
-- Build: `tsc` for every package
-<!-- example:web -->
-- Browser package: overrides the Node preset for the DOM; Rollup bundles its script-tag file
-<!-- /example:web -->
+- Language: TypeScript 7.0.2, with a Node 22 preset in `packages/cli` (`@tsconfig/node22`)
+- Build: `tsc`
 - Build system: Turborepo
 - Linter/Formatter: Biome
 - Testing: Vitest 5 (run from root)
-<!-- example:web -->
-- Browser tests: Playwright + axe; size budgets: size-limit; both owned by the browser package
-<!-- /example:web -->
 - CI/CD: GitHub Actions (separate CI and Release workflows)
 - Versioning: Changesets
 - Node.js for development: >= 26 (LTS; `devEngines.runtime` pins 26.12.1: pnpm downloads it locally, and CI reads the same version from package.json)
-- Node.js for published packages: >= 24 (`engines.node`); CI runs the unit tests on Node 24 and 26, on Linux, macOS and Windows
+- Node.js for the published package: >= 22.13 (`engines.node`); CI runs the unit tests on Node 22, 24 and 26, on Linux, macOS and Windows
 
 ## Repository Structure
 
-`packages/` holds the example packages:
+`packages/cli` is the `create-ts-monorepo-starter` package: a bin entry, a Node target and a test that runs the built command. `docs/` holds the design and plans.
 
-<!-- example:lib -->
-- `packages/shared`: core service and logger, with tests
-- `packages/lib`: a library package that depends on shared
-<!-- /example:lib -->
-<!-- example:web -->
-- `packages/web`: a browser library with an ES module and script-tag build, e2e tests and a size budget
-<!-- /example:web -->
-<!-- example:cli -->
-- `packages/cli`: a command-line package with a bin entry, a Node target and a test that runs the built command
-<!-- /example:cli -->
-
-Each package has its own `package.json`, `tsconfig.json`, and `src/` directory. Packages aren't marked private, so previews include them. Mark a package `"private": true` only if it must never be published or previewed.
+Each package has its own `package.json`, `tsconfig.json`, and `src/` directory. Packages aren't marked private, so previews include them.
 
 ## Setup Commands
 
@@ -63,16 +46,6 @@ pnpm test
 # Watch mode for tests
 pnpm test:watch
 ```
-
-<!-- example:web -->
-```bash
-# Browser tests (Playwright; runs through turbo, which builds first; first time: pnpm --filter @monorepo/web exec playwright install chromium)
-pnpm test:browser
-
-# Size budgets for browser builds (runs through turbo, which builds first)
-pnpm size
-```
-<!-- /example:web -->
 
 ```bash
 # Pack each package as it would publish and check layout and types (publint, attw)
@@ -102,13 +75,6 @@ cd packages/<name> && pnpm test:watch
 
 ### Important: Build Order
 
-<!-- example:lib -->
-Packages with dependencies must be built in order. Turborepo handles this automatically, but be aware:
-
-- `@monorepo/shared` has no dependencies (builds first)
-- `@monorepo/lib` depends on `@monorepo/shared`
-<!-- /example:lib -->
-
 **Critical:** Always run `pnpm build` before `pnpm typecheck` because TypeScript needs the built `.d.ts` files from dependencies.
 
 ## Testing Instructions
@@ -119,9 +85,7 @@ Tests use Vitest with a centralized configuration at the root (`vitest.config.ts
 - Run from root: `pnpm test` (NOT `turbo test`)
 - The test script in root package.json runs `vitest run`, not `turbo test`
 - Unit tests live next to source (`packages/*/src/*.test.ts`)
-<!-- example:cli -->
 - `packages/cli/test/bin.test.ts` runs the *built* command, so `pnpm build` must run before `pnpm test`
-<!-- /example:cli -->
 
 **When adding tests:**
 
@@ -143,19 +107,6 @@ pnpm typecheck
 pnpm test
 pnpm check:packages
 ```
-
-<!-- example:web -->
-With the web example, also run:
-
-```bash
-pnpm size
-pnpm test:browser
-```
-<!-- /example:web -->
-
-<!-- example:template-only -->
-In the template repository, CI also runs `node scripts/check-examples.mjs` after lint.
-<!-- /example:template-only -->
 
 A partial run is not done. If you changed a workflow, also lint it with [actionlint](https://github.com/rhysd/actionlint)
 and audit it with [zizmor](https://docs.zizmor.sh/) (`zizmor .github/workflows`); CI fails on any zizmor finding.
@@ -186,19 +137,13 @@ chore: update dependencies
 - Triggers: Push to main OR Pull Request to main
 - Node version: read from `package.json` (`devEngines.runtime` pins 26.12.1)
 - Steps: Install → Audit → Lint → Unused code → Build → Typecheck → Test → Package checks
-<!-- example:web -->
-- Web steps: Size budget and Browser tests
-<!-- /example:web -->
-<!-- example:template-only -->
-- Template-only step: `node scripts/check-examples.mjs` after Lint keeps every example's lines between markers
-<!-- /example:template-only -->
-- `compat` job: build, then the unit tests on Node 24 and 26 × Linux, macOS, Windows. It calls Vitest with `node` directly,
+- `compat` job: build, then the unit tests on Node 22, 24 and 26 × Linux, macOS, Windows. It calls Vitest with `node` directly,
   because pnpm would run it on the pinned Node 26
 - Least-privilege `permissions`; every action pinned to a commit SHA with the version in a comment
 - `workflows` job: zizmor (version pinned in `ZIZMOR_VERSION`, raised by hand) audits every workflow and fails on
   any finding. Suppress one only with an inline `# zizmor: ignore[rule]` and a comment saying why it doesn't apply
 - A new push to a PR cancels that PR's older run; runs on `main` always finish, because they release
-- `preview` job: publishes every package as an installable preview (pkg.pr.new) for pushes to main and same-repo PRs,
+- `preview` job: publishes the package as an installable preview (pkg.pr.new) for pushes to main and same-repo PRs,
   and comments the install commands on the PR. Runs only when the repository variable `PKG_PR_NEW` is `true`, never
   for fork PRs, and uses no token: the pkg.pr.new GitHub App authenticates the run
 - **Important:** Build runs BEFORE typecheck (required for type definitions)
@@ -215,23 +160,13 @@ chore: update dependencies
 
 ## Adding a New Package
 
-Copy the example closest to what you're building, then rename it:
-
-<!-- example:lib -->
-- `packages/shared/`: a plain library (ES module and types)
-<!-- /example:lib -->
-<!-- example:web -->
-- `packages/web/`: a library that runs in web pages (script-tag build, browser tests, size budget)
-<!-- /example:web -->
-<!-- example:cli -->
-- `packages/cli/`: a command people run (`bin`, Node target, test of the built command)
-<!-- /example:cli -->
+Copy `packages/cli/` and rename it.
 
 Every package keeps these, or `pnpm check:packages` fails or it publishes broken:
 
 - a `build` script that runs `pnpm run clean` (which deletes `dist`) and then `tsc -p tsconfig.json`. Scripts use `node -e`
   instead of `rm` or `chmod`, so they also run on Windows
-- `"engines": { "node": ">=24" }` for packages that run on Node, and `@types/node` 24.x if the package needs it
+- `"engines": { "node": ">=22.13" }` for packages that run on Node, and `@types/node` 22.x if the package needs it
 - `"type": "module"` and an `exports` map whose `types` and `import` point into `dist/`
 - `"files": ["dist"]`: without it, `npm pack` follows `.gitignore` and ships no `dist/`
 - the `check:package` script (`publint --strict && attw --pack . --profile esm-only`)
@@ -244,7 +179,7 @@ Use workspace protocol for internal dependencies:
 
 ```json
 "dependencies": {
-  "@monorepo/<package>": "workspace:*"
+  "<package-name>": "workspace:*"
 }
 ```
 
@@ -269,13 +204,13 @@ Turborepo automatically builds dependencies in the correct order.
 
 ## Publishing to npm
 
-**The template never publishes until `NPM_PUBLISH` is set.**
+**Nothing publishes until `NPM_PUBLISH` is set.**
 
 To publish:
 
-1. Give each package a name that's free on npm, or use a scope you own. Mark any package that must never publish
-   `"private": true`. Add `"repository": {"type": "git", "url": "git+https://github.com/<owner>/<repo>.git", "directory": "packages/<name>"}`
-   to each package you publish, because npm provenance checks it against the publishing repository
+1. Each published package needs a free npm name and a `repository` field
+   (`{"type": "git", "url": "git+https://github.com/prosdevlab/create-ts-monorepo-starter.git", "directory": "packages/<name>"}`),
+   because npm provenance checks it against the publishing repository
 2. Set the repository variable `NPM_PUBLISH` to `true` (Settings → Secrets and variables → Actions → Variables)
 3. Add a trusted publisher for the package on npmjs.com (repository, workflow `ci.yml`, environment `npm`): npm checks
    the calling workflow, and `ci.yml` calls `release.yml`
@@ -294,7 +229,7 @@ turbo <command>    # Run via Turborepo with caching
 
 ```bash
 pnpm -F "<package-name>" build
-pnpm --filter "@monorepo/*" test
+pnpm --filter "create-ts-monorepo-starter" test
 ```
 
 ### Checking package locations
@@ -370,54 +305,13 @@ pnpm list --depth 0  # See all workspace packages
   SHAs. Its `cooldown` must equal pnpm's `minimumReleaseAge`, and so must `days` in `.github/zizmor.yml`. It doesn't update `devEngines.runtime`, `ZIZMOR_VERSION` or
   `@types/node` majors: those are raised by hand.
 - `@types/node` matches the Node major the code runs on (Dependabot skips its majors): 26.x in the root `package.json`, for the
-  tooling on the pinned runtime; 24.x in packages, for the oldest `engines.node`. Types for a newer Node let code typecheck
+  tooling on the pinned runtime; 22.x in `packages/cli`, for the oldest `engines.node`. Types for a newer Node let code typecheck
   against APIs its users' Node doesn't have; raise them together.
 
-## Versioning Strategy
+## Versioning
 
-Versions apply to the **template repository** as a whole, not to its packages.
-
-### Repository Versioning
-
-A template is copied once; each project then lives on its own and nothing upgrades in place. So template versions mark milestones, not compatibility. Git tags use the format `vMAJOR.MINOR.PATCH` (e.g., `v1.0.0`, `v1.1.0`):
-
-- **MAJOR**: a new generation of the template, with a different shape
-  - Example: changing the package manager, the build system, or the repository layout
-- **MINOR**: a release of meaningful changes, including major tool upgrades and workflow changes
-  - Example: new example packages, new CI checks, TypeScript or Node major upgrades, a redesigned release workflow
-- **PATCH**: fixes and documentation
-  - Example: correcting CI configuration, updating the README
-
-Every release's notes include **Changes for existing projects**: what a project created from the previous version would change to match. Read that section before porting changes into a project; it is where breaking changes are called out.
-
-### Package Versioning
-
-Individual packages remain at `0.1.0` by default:
-- Packages aren't published by default (`NPM_PUBLISH` is unset)
-- Users customize package names and versions after cloning
-- Version according to [Semantic Versioning](https://semver.org/) once users start developing
-
-### Pre-release Versions
-
-Use pre-release tags for experimental features:
-- `v2.0.0-alpha.1` - Early testing, unstable
-- `v2.0.0-beta.1` - Feature complete, testing phase
-- `v2.0.0-rc.1` - Release candidate, final testing
-
-## Template Customization
-
-When using this template:
-
-1. Update package names in all `package.json` files (change `@monorepo/*` scope)
-2. Update repository URL in root `package.json`
-3. Update LICENSE file with your information
-4. Customize README.md for your project
-   - Turn on private vulnerability reporting (Settings → Advanced Security), and set the reply time in `SECURITY.md`
-5. Decide which packages should be public vs private
-6. To publish, set up npm trusted publishing (README "Setting Up npm Publishing"); never add an npm token secret
-7. Start versioning your packages from `0.1.0` according to your development needs
-
-<!-- BEGIN:turborepo-agent-rules -->
+The package is versioned with Changesets, starting at `0.1.0`; follow [Semantic Versioning](https://semver.org/). Run
+`pnpm changeset` for every change that affects users of the CLI.
 
 # This is NOT the Turborepo you know
 
