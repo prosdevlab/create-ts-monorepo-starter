@@ -15,6 +15,7 @@ function sectionEntries(text: string): Set<string> {
   for (const doc of text.split(/^---\r?$/m)) {
     let section: string | null = null;
     for (const line of doc.split(/\r?\n/)) {
+      if (line.startsWith('#')) continue;
       const top = /^(\w+):\s*$/.exec(line);
       if (top) {
         section = (SECTIONS as readonly string[]).includes(top[1] as string)
@@ -23,7 +24,8 @@ function sectionEntries(text: string): Set<string> {
       } else if (/^\S/.test(line)) {
         section = null;
       } else if (section) {
-        const key = /^ {2}('(?:[^']|'')*'|[^\s'][^:]*):(?:\s|$)/.exec(line);
+        // A key ends at the first `:` followed by whitespace or end of line, so `node@runtime:1.0.0:` works.
+        const key = /^ {2}('(?:[^']|'')*'|[^\s'#].*?):(?=\s|$)/.exec(line);
         if (key) found.add(`${section}: ${unquote(key[1] as string)}`);
       }
     }

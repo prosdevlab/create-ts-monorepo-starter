@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DOTFILE_RENAMES, templateDir, templateVersion } from '../src/template';
+import { DOTFILE_RENAMES, pnpmSpec, templateDir, templateVersion } from '../src/template';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const script = join(root, 'scripts/fetch-template.mjs');
@@ -72,5 +72,23 @@ describe('bundled template', () => {
     expect(version.tag).toBeNull();
     expect(version.commit).toMatch(/^[0-9a-f]{40}$/);
     expect(existsSync(join(dist, 'template', '_gitignore'))).toBe(true);
+  });
+});
+
+describe('pnpmSpec', () => {
+  const manifest = (packageManager?: string) => JSON.stringify({ packageManager });
+
+  it('strips a +sha suffix', () => {
+    expect(pnpmSpec(manifest('pnpm@12.15.0+sha512.abc'))).toBe('pnpm@12.15.0');
+  });
+
+  it('reads the bundled template by default', () => {
+    expect(pnpmSpec()).toMatch(/^pnpm@\d+\.\d+\.\d+$/);
+  });
+
+  it('errors when packageManager is missing or not pnpm@x.y.z', () => {
+    expect(() => pnpmSpec(manifest())).toThrow('packageManager');
+    expect(() => pnpmSpec(manifest('yarn@4.0.0'))).toThrow('packageManager');
+    expect(() => pnpmSpec(manifest('pnpm@latest'))).toThrow('packageManager');
   });
 });

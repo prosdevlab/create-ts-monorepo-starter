@@ -24,10 +24,10 @@ export function templateVersion(): { tag: string | null; commit: string } {
 }
 
 /** The pnpm the template pins (`pnpm@x.y.z`), without any `+sha` suffix. */
-export function pnpmSpec(): string {
-  const { packageManager } = JSON.parse(
-    readFileSync(new URL('template/package.json', dist), 'utf8')
-  ) as { packageManager?: string };
+export function pnpmSpec(
+  manifest: string = readFileSync(new URL('template/package.json', dist), 'utf8')
+): string {
+  const { packageManager } = JSON.parse(manifest) as { packageManager?: string };
   const spec = packageManager?.split('+')[0];
   if (!spec || !/^pnpm@\d+\.\d+\.\d+$/.test(spec)) {
     throw new Error(`The bundled template has no usable packageManager (found: ${packageManager})`);
