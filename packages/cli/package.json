@@ -2,6 +2,19 @@
   "name": "create-ts-monorepo-starter",
   "version": "0.1.0",
   "description": "Create a TypeScript monorepo from the ts-monorepo-starter template",
+  "keywords": [
+    "create",
+    "scaffold",
+    "typescript",
+    "monorepo",
+    "pnpm",
+    "turborepo"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/prosdevlab/create-ts-monorepo-starter#readme",
+  "bugs": {
+    "url": "https://github.com/prosdevlab/create-ts-monorepo-starter/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/prosdevlab/create-ts-monorepo-starter.git",

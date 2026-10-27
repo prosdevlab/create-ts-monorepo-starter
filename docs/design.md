@@ -91,12 +91,13 @@ The CLI itself runs on Node 22.13 and later (the first 22.x whose `styleText` re
 | pnpm on the machine | What happens | What the CLI does |
 | --- | --- | --- |
 | 10.26 to 11.x (tested 10.26.2, 10.30.0, 10.33.0, 10.34.8, 11.28.8) | Switches itself to 12.15.0 from `packageManager` and installs | Runs `pnpm install` normally |
+| 10.0 to 10.25 | Can't switch itself to pnpm 12 | Treated like 9.x: stops before installing and prints the upgrade command |
 | 9.x or older (tested 9.15.9) | Without a guard, installs with itself: ignores the pinned pnpm, the 3-day rule and the pinned Node, and rewrites the lockfile | Stops before installing and prints the upgrade command. The template's new `engines.pnpm >=12` makes pnpm 9 fail with `ERR_PNPM_UNSUPPORTED_ENGINE` too |
 | None | Can't install | Installs with `npm exec --package=pnpm@12.15.0 -- pnpm install --dir <folder>` from the parent folder (20 s on a cold machine, downloads Node 26.12.1), then says commits need pnpm and prints `npm install -g pnpm` |
 
 Two facts shape this. npm and npx refuse to run inside the project unless the system Node matches the pinned 26.12.1 exactly, so the fallback must run from outside the folder. And the git hooks call `pnpm`, so a machine without a global pnpm fails the user's first commit after creation (the CLI's own commit skips the hooks); the CLI says so instead of hiding it.
 
-Not yet tested: Windows; pnpm installed through Homebrew, Corepack or pnpm's standalone installer; pnpm 10 below 10.26; Volta, whose pnpm setup caused the earlier `ENOEXEC` failure.
+Not yet tested: Windows; pnpm installed through Homebrew, Corepack or pnpm's standalone installer; Volta, whose pnpm setup caused the earlier `ENOEXEC` failure.
 
 ## Generating a project
 
