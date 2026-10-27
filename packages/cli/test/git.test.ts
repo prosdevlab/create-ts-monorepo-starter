@@ -14,16 +14,21 @@ afterEach(() => {
 });
 
 /** An Exec that runs git against a config of our choosing, not the developer's. */
-function withEnv(env: Record<string, string>): Exec {
+function withEnv(env: Record<string, string | undefined>): Exec {
   return (cmd, args, opts) => defaultExec(cmd, args, { ...opts, env: { ...env, ...opts.env } });
 }
 
-function isolatedEnv(configFile: string, home: string): Record<string, string> {
+function isolatedEnv(configFile: string, home: string): Record<string, string | undefined> {
   return {
     HOME: home,
     USERPROFILE: home,
     GIT_CONFIG_GLOBAL: configFile,
     GIT_CONFIG_NOSYSTEM: '1',
+    // undefined removes a variable a developer's shell may have set.
+    GIT_DIR: undefined,
+    GIT_WORK_TREE: undefined,
+    GIT_CONFIG_COUNT: undefined,
+    GIT_CONFIG_PARAMETERS: undefined,
   };
 }
 
