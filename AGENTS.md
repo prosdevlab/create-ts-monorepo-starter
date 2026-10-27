@@ -171,7 +171,7 @@ Every package keeps these, or `pnpm check:packages` fails or it publishes broken
 - `"files": ["dist"]`: without it, `npm pack` follows `.gitignore` and ships no `dist/`
 - the `check:package` script (`publint --strict && attw --pack . --profile esm-only`)
 
-Then run `pnpm install` to link it, and add a `vitest.config.ts` alias and root `tsconfig.json` path if other packages import it from source.
+Then run `pnpm install` to link it. Vitest picks up `packages/**/*.test.ts` automatically.
 
 ## Package Dependencies
 
@@ -201,6 +201,9 @@ Turborepo automatically builds dependencies in the correct order.
 4. Commit the changeset file
 5. On merge to main, Changesets creates a version PR
 6. Merge version PR to publish (only if the repository variable `NPM_PUBLISH` is `true`)
+
+The package starts at `0.1.0`; follow [Semantic Versioning](https://semver.org/). Add a changeset for every change that
+affects users of the CLI.
 
 ## Publishing to npm
 
@@ -308,10 +311,7 @@ pnpm list --depth 0  # See all workspace packages
   tooling on the pinned runtime; 22.x in `packages/cli`, for the oldest `engines.node`. Types for a newer Node let code typecheck
   against APIs its users' Node doesn't have; raise them together.
 
-## Versioning
-
-The package is versioned with Changesets, starting at `0.1.0`; follow [Semantic Versioning](https://semver.org/). Run
-`pnpm changeset` for every change that affects users of the CLI.
+<!-- BEGIN:turborepo-agent-rules -->
 
 # This is NOT the Turborepo you know
 
