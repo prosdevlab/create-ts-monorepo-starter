@@ -58,7 +58,7 @@ jobs:
       - name: Test
         run: pnpm test
 
-      # Packs each package the way it would publish, then checks its layout (publint) and type resolution (attw).
+      # Packs each package the way it would publish, then checks its layout (publint).
       - name: Package checks
         run: pnpm check:packages
 

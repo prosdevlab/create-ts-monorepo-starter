@@ -48,7 +48,7 @@ pnpm test:watch
 ```
 
 ```bash
-# Pack each package as it would publish and check layout and types (publint, attw)
+# Pack each package as it would publish and check its layout (publint)
 pnpm check:packages
 
 # Unused files, exports and dependencies, and undeclared dependencies (knip; no build needed)
@@ -167,9 +167,9 @@ Every package keeps these, or `pnpm check:packages` fails or it publishes broken
 - a `build` script that runs `pnpm run clean` (which deletes `dist`) and then `tsc -p tsconfig.json`. Scripts use `node -e`
   instead of `rm` or `chmod`, so they also run on Windows
 - `"engines": { "node": ">=22.13" }` for packages that run on Node, and `@types/node` 22.x if the package needs it
-- `"type": "module"` and an `exports` map whose `types` and `import` point into `dist/`
+- `"type": "module"` and a `bin` that points into `dist/` (no `exports` map: this is a bin-only package)
 - `"files": ["dist"]`: without it, `npm pack` follows `.gitignore` and ships no `dist/`
-- the `check:package` script (`publint --strict && attw --pack . --profile esm-only`)
+- the `check:package` script (`scripts/check-package.mjs`: `publint --strict` on package.json and the bundle, minus the bundled template)
 
 Then run `pnpm install` to link it. Vitest picks up `packages/**/*.test.ts` automatically.
 
