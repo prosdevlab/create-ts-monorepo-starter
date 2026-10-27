@@ -1,0 +1,62 @@
+name: Template main
+
+# Weekly: is a new template release out, and does the CLI still work on the template's main branch?
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: template-main
+  cancel-in-progress: false
+
+jobs:
+  template-main:
+    runs-on: ubuntu-latest
+    # Measured: the ubuntu e2e job takes about 1 minute after the build.
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: package.json
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # A failure here is reported after the main-branch test below has run.
+      - name: Check for a new template release
+        id: release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api repos/prosdevlab/ts-monorepo-starter/releases/latest --jq .tag_name)
+          node packages/cli/scripts/check-template-release.mjs "$latest"
+
+      # TEMPLATE_REF=main bundles the template's main branch; the fetch script prints the commit it used.
+      - name: Build with the template's main branch
+        env:
+          TEMPLATE_REF: main
+        run: pnpm build
+
+      - name: Generated-project tests
+        run: pnpm test:e2e
+
+      - name: Fail if a new template release is out
+        if: ${{ always() && steps.release.outcome == 'failure' }}
+        run: |
+          echo "A newer template release is out; see the release check step." >&2
+          exit 1

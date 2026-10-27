@@ -124,7 +124,7 @@ jobs:
           - os: windows-latest
             subsets: lib,cli,web
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 20
     env:
       E2E_SUBSETS: ${{ matrix.subsets }}
 
