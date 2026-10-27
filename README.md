@@ -5,19 +5,82 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A command-line tool that creates a TypeScript monorepo from the
-[ts-monorepo-starter](https://github.com/prosdevlab/ts-monorepo-starter) template.
+[ts-monorepo-starter](https://github.com/prosdevlab/ts-monorepo-starter) template: pnpm workspaces, Turborepo, Biome,
+Vitest, Changesets, and a CI that publishes to npm with provenance and no stored token. You pick which examples to
+keep, and get a project that passes its own CI on the first commit.
+
+## Usage
 
 ```bash
+npm create ts-monorepo-starter@latest my-tools
 pnpm create ts-monorepo-starter my-tools
+yarn create ts-monorepo-starter my-tools
+bun create ts-monorepo-starter my-tools
 ```
 
-`npm create`, `yarn create` and `bun create` work the same way. **The command is coming:** the CLI is still being
-built, and nothing is published to npm yet. The design is in [docs/design.md](docs/design.md) and the plans are in
-[docs/plans](docs/plans).
+The CLI asks for the folder, the npm scope and the examples, then copies the template, renames the scope, removes the
+examples you didn't pick, runs `git init`, installs, and makes the first commit. `-y` accepts every default and asks
+nothing, which is also what happens when stdin isn't a terminal. A folder that already exists and isn't empty is
+refused; `--force` moves it aside to `<folder>.backup-<date>` first. Nothing you own is deleted, and Ctrl-C leaves
+nothing behind.
+
+With npm, put `--` before the options: `npm create ts-monorepo-starter@latest my-tools -- --examples lib,cli`.
+
+### Options
+
+| Flag | What it does | Default |
+| --- | --- | --- |
+| `[folder]` (first argument) | The project folder; must be a valid npm name once lowercased | `my-ts-monorepo` (prompted) |
+| `--scope <@name>` | npm scope for the packages, sanitized to lowercase and dashes | `@<folder>` |
+| `--examples <list>` | `lib`, `cli`, `web`, comma-separated; at least one | all three |
+| `--no-git` | Don't initialize git (skipped anyway inside a git repository) | git init and a first commit |
+| `--no-install` | Don't install dependencies; the lockfile is still updated | install |
+| `--force` | Move a non-empty folder aside first | refuse (asks when interactive) |
+| `-y`, `--yes` | Accept every default, ask nothing | ask |
+| `-h`, `--help` | Show the help | |
+| `-v`, `--version` | Show the CLI and template versions | |
+
+## What you get
+
+A pnpm 12 monorepo with the template's toolchain, CI, release workflow and docs, plus up to three example packages:
+
+- **`lib`** (`packages/shared` and `packages/lib`): a library that depends on a core package, with a service and a logger.
+  `shared` always comes with it.
+- **`cli`** (`packages/cli`): a command-line package with a `bin`, built for Node.
+- **`web`** (`packages/web`): a browser library, usable from a script tag and as an ES module, with browser tests, a size
+  limit and accessibility checks.
+
+Nothing publishes until you opt in; the generated README says how, and the CLI's closing checklist lists each step.
+
+### pnpm
+
+The generated project needs pnpm 12, which brings its own pinned Node.js. The CLI itself runs on Node 22.13 or later,
+with any package manager:
+
+- pnpm 10.26 or newer switches itself to pnpm 12 for the project, so the install just works.
+- No pnpm: the CLI installs with `npm exec` and says that commits need pnpm, with the command to install it.
+- pnpm 9 or older: the CLI stops before installing and prints the upgrade command, because pnpm 9 would ignore the
+  pinned pnpm and rewrite the lockfile.
+
+## Template version
+
+Each release bundles one release of the template, so you get exactly what that release was tested with, offline.
+`create-ts-monorepo-starter --version` prints both versions, and the first commit's message names them. A weekly check
+tells the maintainers when a new template release is out.
+
+## Problems and security
+
+Report a bug or ask a question in [this repository's issues](https://github.com/prosdevlab/create-ts-monorepo-starter/issues).
+Report a vulnerability privately, as [SECURITY.md](SECURITY.md) describes. A problem in the generated project's own code
+belongs to the [template](https://github.com/prosdevlab/ts-monorepo-starter), which is where its files come from.
+
+The design is in [docs/design.md](docs/design.md) and the plans are in [docs/plans](docs/plans).
+
+## Developing this CLI
 
 This repository was itself created from the template, so it uses the same toolchain.
 
-## Tooling
+### Tooling
 
 - [PNPM](https://pnpm.io/) 12 for package management, and to pin the Node.js version
 - [Turborepo](https://turbo.build/repo) for the build system
@@ -34,7 +97,7 @@ This repository was itself created from the template, so it uses the same toolch
 The published package supports Node.js 22.13 and later, tested on Node 22, 24 and 26 on Linux, macOS and Windows. The
 repository itself is developed on Node 26.
 
-## Project Structure
+### Project Structure
 
 ```
 create-ts-monorepo-starter/
@@ -55,15 +118,15 @@ create-ts-monorepo-starter/
 └── vitest.config.ts     # Vitest config
 ```
 
-## Getting Started
+### Getting Started
 
-### Prerequisites
+#### Prerequisites
 
 - [pnpm](https://pnpm.io/) 12. It downloads the pinned Node.js version itself.
 - Any Node.js with npm, to install pnpm. After that, commands run through pnpm use the pinned Node.js 26
   (`devEngines.runtime` in `package.json`).
 
-### Installation
+#### Installation
 
 1. Clone this repository
    ```bash
@@ -90,7 +153,7 @@ create-ts-monorepo-starter/
    pnpm test
    ```
 
-### Development Workflow
+#### Development Workflow
 
 ```bash
 pnpm lint            # Biome
@@ -105,13 +168,23 @@ into `dist/template`, then marks `dist/cli.js` executable. `clean` deletes `dist
 sources never ship. The package doesn't use `composite`: with it, `tsc` can skip writing anything after `build` is deleted.
 `TEMPLATE_REF=<branch> pnpm build` bundles that branch instead of the pinned release.
 
-### Making Changes
+#### Generated-Project Tests and the Template
+
+`pnpm test:e2e` (needs the network, and `pnpm build` first) generates a project for every combination of examples with the
+built CLI and runs each project's own CI. `E2E_SUBSETS=lib,cli` limits it to those combinations.
+
+The template version is pinned in `packages/cli/template-version.json` (tag and commit). The weekly
+`template-main.yml` workflow fails when the template has a newer release, with `Template vX.Y.Z is out; update
+packages/cli/template-version.json`, and tests the CLI against the template's `main` branch. To take a new release,
+update `tag` and `commit` in a PR: its CI rebuilds and re-tests the bundle.
+
+#### Making Changes
 
 1. Create a branch, make your changes, and commit with Conventional Commits (`feat: add new feature`)
 2. Add a changeset with `pnpm changeset`
 3. Push your branch and open a pull request
 
-### Release Process
+#### Release Process
 
 Releasing is handled by GitHub Actions when changes are merged to `main`:
 
@@ -119,7 +192,7 @@ Releasing is handled by GitHub Actions when changes are merged to `main`:
 2. Changesets opens a PR that bumps versions and updates changelogs
 3. When that PR is merged, the package is published to npm (only when `NPM_PUBLISH` is `true`)
 
-### Preview Packages
+#### Preview Packages
 
 With previews on, every push to `main` and every PR from a branch in this repository publishes the package to [pkg.pr.new](https://pkg.pr.new). A bot comments the install commands on the PR, so anyone can try a change before it's released:
 
@@ -136,7 +209,7 @@ To turn previews on:
 
 The repository is public, so its code is public on pkg.pr.new.
 
-### Setting Up npm Publishing
+#### Setting Up npm Publishing
 
 The package publishes with **npm trusted publishing**: GitHub Actions proves its identity to npm for each release, so no npm token is stored anywhere, and each version gets a **provenance** statement linking it to the commit and workflow that built it (for public packages from public repositories).
 
@@ -168,19 +241,19 @@ How a release runs: CI's `release` job calls `.github/workflows/release.yml` on 
 3. **pack** (version PR merged, and `NPM_PUBLISH` is `true`) builds, runs the package checks, and packs tarballs, with read-only access.
 4. **publish** publishes those tarballs. It is the only job that can get npm credentials, and it never builds.
 
-### Package Checks
+#### Package Checks
 
 `pnpm check:packages` runs [publint](https://publint.dev) on the package and its bundle (`bin` points at a file that ships); this package has no `exports` or types, so there is nothing for Are The Types Wrong to check. The package lists `"files": ["dist"]`: without it, what ships depends on the tool.
 
-### Unused Code
+#### Unused Code
 
 `pnpm check:unused` runs [knip](https://knip.dev/), and CI runs it on every push. It fails on files nothing imports, exports nothing uses, dependencies nothing imports, and imports of packages a `package.json` doesn't declare. If knip reports something that is used, add a `knip.json` entry for it rather than deleting the code.
 
-### Issues, Pull Requests and Security Reports
+#### Issues, Pull Requests and Security Reports
 
 Issue forms (`.github/ISSUE_TEMPLATE/`) ask for the version, steps to reproduce and the environment; the PR template (`.github/PULL_REQUEST_TEMPLATE.md`) lists the checks and the changeset. `SECURITY.md` sends vulnerability reports to GitHub's private reporting.
 
-### Dependency Updates
+#### Dependency Updates
 
 Every dependency is pinned to an exact version, and nothing newer than **3 days** is installed. Freshly published releases are where compromised packages tend to land, and most are caught and pulled within hours to days; waiting means you never install them.
 

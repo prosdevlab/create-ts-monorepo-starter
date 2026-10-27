@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository builds `create-ts-monorepo-starter`, a CLI that generates TypeScript monorepos from the [ts-monorepo-starter](https://github.com/prosdevlab/ts-monorepo-starter) template: `pnpm create ts-monorepo-starter my-tools` (also `npm create`, `yarn create`, `bun create`). The command is still being built; the design and plans are in `docs/`. The repository itself was created from that template and keeps its toolchain. `CLAUDE.md` imports this file, so these instructions are the single source for every agent.
+This repository builds `create-ts-monorepo-starter`, a CLI that generates TypeScript monorepos from the [ts-monorepo-starter](https://github.com/prosdevlab/ts-monorepo-starter) template: `pnpm create ts-monorepo-starter my-tools` (also `npm create`, `yarn create`, `bun create`). The design and plans are in `docs/`. The repository itself was created from that template and keeps its toolchain. `CLAUDE.md` imports this file, so these instructions are the single source for every agent.
 
 ## Project Overview
 
@@ -108,6 +108,9 @@ pnpm test
 pnpm check:packages
 ```
 
+`pnpm test:e2e` is also part of CI (it needs the network and takes minutes), so run it, after `pnpm build`, when you
+touch generation, markers, the template bundle or the CLI's install steps. `E2E_SUBSETS=lib,cli` runs fewer combinations.
+
 A partial run is not done. If you changed a workflow, also lint it with [actionlint](https://github.com/rhysd/actionlint)
 and audit it with [zizmor](https://docs.zizmor.sh/) (`zizmor .github/workflows`); CI fails on any zizmor finding.
 
@@ -146,7 +149,16 @@ chore: update dependencies
 - `preview` job: publishes the package as an installable preview (pkg.pr.new) for pushes to main and same-repo PRs,
   and comments the install commands on the PR. Runs only when the repository variable `PKG_PR_NEW` is `true`, never
   for fork PRs, and uses no token: the pkg.pr.new GitHub App authenticates the run
+- `e2e` job: generates projects with the built CLI (every combination of examples on Linux, the all-examples project on
+  Windows) and runs each project's own CI (`pnpm test:e2e`)
+- `fresh-machine` job: runs the built CLI with `-y` on Linux, macOS and Windows with no pnpm, pnpm 9 and pnpm 10
 - **Important:** Build runs BEFORE typecheck (required for type definitions)
+
+### Template Main Workflow (`.github/workflows/template-main.yml`)
+
+- Triggers: weekly (Monday 06:00 UTC) and by hand; `contents: read` only
+- Fails when the template's latest release differs from `packages/cli/template-version.json`
+  (`packages/cli/scripts/check-template-release.mjs`), then still builds with `TEMPLATE_REF=main` and runs `pnpm test:e2e`
 
 ### Release Workflow (`.github/workflows/release.yml`)
 
