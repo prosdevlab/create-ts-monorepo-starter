@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   backUp,
@@ -35,7 +35,7 @@ const put = (dir: string, rel: string, content: string) => {
 describe('paths', () => {
   it('builds the backup path in local time', () => {
     expect(backupPath(join('/x', 'my-tools'), new Date(2026, 9, 27, 10, 42, 5))).toBe(
-      join('/x', 'my-tools.backup-20261027-104205')
+      `${resolve('/x', 'my-tools')}.backup-20261027-104205`
     );
   });
 
@@ -146,6 +146,10 @@ describe('moveIntoPlace', () => {
     mkdirSync(temp, { recursive: true });
     await expect(moveIntoPlace(temp, target)).rejects.toThrow(/inside the target/);
     await expect(moveIntoPlace(target, target)).rejects.toThrow(/inside the target/);
+    // A name that merely starts with two dots is still inside.
+    const dotted = join(target, '..cache');
+    mkdirSync(dotted);
+    await expect(moveIntoPlace(dotted, target)).rejects.toThrow(/inside the target/);
   });
 
   it('retries EACCES only on win32', async () => {
@@ -160,7 +164,10 @@ describe('moveIntoPlace', () => {
         sleep: async (ms) => {
           sleeps.push(ms);
         },
-      }).catch(() => undefined);
+      }).catch((error) => {
+        if (error !== err) throw error;
+        return 'refused';
+      });
       return sleeps;
     };
     expect(await run('win32')).toEqual([100]);

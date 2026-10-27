@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { rename as fsRename, lstat, mkdir, readdir, rmdir, stat } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const RETRY_CODES = new Set(['EPERM', 'EBUSY']);
 const RETRY_DELAYS = [100, 200, 400, 800, 1600];
@@ -71,7 +71,8 @@ export async function moveIntoPlace(
   temp = resolve(temp);
   target = resolve(target);
   const inside = relative(target, temp);
-  if (inside === '' || (!inside.startsWith('..') && !isAbsolute(inside))) {
+  const outside = inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside);
+  if (!outside) {
     throw new Error(`The temporary folder ${temp} is inside the target ${target}`);
   }
   // EACCES is a transient lock on Windows but a real permission error elsewhere.
