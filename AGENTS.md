@@ -149,8 +149,8 @@ chore: update dependencies
 - `preview` job: publishes the package as an installable preview (pkg.pr.new) for pushes to main and same-repo PRs,
   and comments the install commands on the PR. Runs only when the repository variable `PKG_PR_NEW` is `true`, never
   for fork PRs, and uses no token: the pkg.pr.new GitHub App authenticates the run
-- `e2e` job: generates projects with the built CLI (every combination of examples on Linux, the all-examples project on
-  Windows) and runs each project's own CI (`pnpm test:e2e`)
+- `e2e` job: generates projects (`pnpm test:e2e`) with the built CLI (every combination of examples on Linux, the
+  all-examples project on Windows) and runs each project's own CI
 - `fresh-machine` job: runs the built CLI with `-y` on Linux, macOS and Windows with no pnpm, pnpm 9 and pnpm 10
 - **Important:** Build runs BEFORE typecheck (required for type definitions)
 

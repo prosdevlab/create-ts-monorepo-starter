@@ -58,5 +58,5 @@ jobs:
       - name: Fail if a new template release is out
         if: ${{ always() && steps.release.outcome == 'failure' }}
         run: |
-          echo "A newer template release is out; see the release check step." >&2
+          echo "The template release check failed; see that step's log." >&2
           exit 1
