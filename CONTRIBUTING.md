@@ -102,9 +102,13 @@ repository root with `vhs docs/demo/demo.tape`: the tape runs the published pack
 built CLI and runs each project's own CI. `E2E_SUBSETS=lib,cli` limits it to those combinations.
 
 The template version is pinned in `packages/cli/template-version.json` (tag and commit). The weekly
-`template-main.yml` workflow fails when the template has a newer release, with `Template vX.Y.Z is out; update
-packages/cli/template-version.json`, and tests the CLI against the template's `main` branch. To take a new release,
-update `tag` and `commit` in a PR: its CI rebuilds and re-tests the bundle. GitHub disables scheduled workflows in a
+`template-main.yml` workflow fails when the template has a newer release, with `Template vX.Y.Z is out; run pnpm
+update-template`, and tests the CLI against the template's `main` branch. To take a new release, run
+`pnpm update-template` (or `pnpm update-template v2.3.1` for a specific one): it pins the release's tag and commit,
+adds a changeset (patch for a template patch release, otherwise minor), and prints the release notes of every release
+since the pinned one. Then run `pnpm build && pnpm test && pnpm test:e2e` and open a PR. Coding agents using Claude Code
+can run the `update-template` skill (`.claude/skills/update-template`), which does all of this and works through
+failures. GitHub disables scheduled workflows in a
 public repository after 60 days without repository activity, and failed scheduled runs notify the person who last
 edited the cron, so re-enable and check `template-main.yml` if the repository goes quiet.
 
