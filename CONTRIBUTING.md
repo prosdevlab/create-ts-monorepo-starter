@@ -80,7 +80,7 @@ create-ts-monorepo-starter/
 ```bash
 pnpm lint            # Biome
 pnpm format          # Biome, with fixes
-pnpm typecheck       # run after pnpm build
+pnpm typecheck       # no build needed
 pnpm check:unused    # knip
 pnpm check:packages  # publint on the package
 ```

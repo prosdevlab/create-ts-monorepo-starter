@@ -12,7 +12,7 @@ const IDENTIFIERS: Record<Example, string[]> = {
   web: ['packages/web', '@acme/web', 'playwright', 'size-limit', 'axe-core'],
 };
 
-// Vitest's optional peer, listed in every lockfile; nothing Playwright is installed (Ruling 15).
+// Vitest's optional peer, listed in every lockfile; nothing Playwright is installed.
 const LOCKFILE_ALLOWED = '@vitest/browser-playwright';
 
 const LEFTOVERS = ['@monorepo', 'example:', 'template-only'];

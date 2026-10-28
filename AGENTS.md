@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository builds `create-ts-monorepo-starter`, a CLI that generates TypeScript monorepos from the [ts-monorepo-starter](https://github.com/prosdevlab/ts-monorepo-starter) template: `pnpm create ts-monorepo-starter my-tools` (also `npm create`, `yarn create`, `bun create`). The design and plans are in `docs/`. The repository itself was created from that template and keeps its toolchain. `CLAUDE.md` imports this file, so these instructions are the single source for every agent.
+This repository builds `create-ts-monorepo-starter`, a CLI that generates TypeScript monorepos from the [ts-monorepo-starter](https://github.com/prosdevlab/ts-monorepo-starter) template: `pnpm create ts-monorepo-starter my-tools` (also `npm create`, `yarn create`, `bun create`). The design and plans are in `docs/`. `README.md` is for people using the CLI; `CONTRIBUTING.md` covers developing it. The repository itself was created from that template and keeps its toolchain. `CLAUDE.md` imports this file, so these instructions are the single source for every agent.
 
 ## Project Overview
 
@@ -21,9 +21,64 @@ A modern TypeScript monorepo using pnpm workspaces, Turborepo for build orchestr
 
 ## Repository Structure
 
-`packages/cli` is the `create-ts-monorepo-starter` package: a bin entry, a Node target and a test that runs the built command. `docs/` holds the design and plans.
+```
+packages/cli/
+├── src/                   # the CLI, one module per concern (map below)
+├── test/                  # unit tests, one file per module (args.test.ts tests args.ts, ...)
+│   └── e2e/               # generates real projects and runs their CI (pnpm test:e2e)
+├── scripts/               # fetch-template.mjs (bundles the template at build time), check-package.mjs,
+│                          # check-template-release.mjs (the weekly release check)
+├── template-version.json  # the template release the build bundles: tag and commit
+└── rollup.config.js       # bundles build/cli.js and @clack/prompts into dist/cli.js; no runtime dependencies
+```
 
-Each package has its own `package.json`, `tsconfig.json`, and `src/` directory. Packages aren't marked private, so previews include them.
+`docs/demo/` holds the README's recorded demo (`vhs docs/demo/demo.tape`, CONTRIBUTING.md "The README Demo").
+
+### How a run works, module by module
+
+In the order a run touches them:
+
+- `cli.ts`: the bin entry. Calls `main` and sets `process.exitCode`; it never calls `process.exit()`, so output flushes.
+- `main.ts`: parses the arguments, asks the questions when interactive, builds the plan, calls `run` and prints the
+  result. Exit codes: 0 done, 1 failure, 2 usage error, 130 interrupted.
+- `args.ts`: `parseArgv` (`node:util` `parseArgs`) into `Options`; the `lib`, `cli`, `web` example list.
+- `names.ts`: folder to package name, and scope normalization.
+- `ui.ts`: the prompts (`createAsk`, @clack/prompts), two outputs (clack for terminals; plain for pipes, CI and
+  `NO_COLOR`), the help and version text.
+- `run.ts`: the orchestration: generate into a temporary folder, `git init`, install, lockfile check, first commit,
+  then move into place.
+- `template.ts`: where the bundled template is (`dist/template`), its version, the pnpm version from its
+  `packageManager`, and the dotfile renames (`_gitignore`).
+- `generate.ts`: copies the template; removes unpicked examples and template-only files; applies markers; renames
+  `@monorepo/` to the scope; rewrites the identity lines (README, LICENSE). Throws `Template changed: ...` when an
+  expected line is missing.
+- `markers.ts`: removes `example:NAME` and `template-only` blocks, with the same patterns as the template's
+  `scripts/check-examples.mjs`.
+- `pnpm.ts`: detects pnpm and picks the install command (pnpm, or `npm exec` with the template's pnpm when none is
+  installed; pnpm older than 10.26 is refused). Runs child processes, and stops them and their children on interrupt.
+- `lockfile.ts`: `assertLockfileSubset`. The install may remove lockfile entries but never add one.
+- `git.ts`: whether the folder is inside a repository, the git identity, init and the first commit.
+- `workspace.ts`: temporary and backup paths, the move into place, and the interrupt handler.
+
+### Rules that keep users safe
+
+Each of these is tested. Don't change one without a test that shows the new behavior:
+
+- **Nothing touches the user's folder until the end.** Everything happens in a temporary sibling folder
+  (`.<name>.tmp-<hex>`, same volume so the final rename is atomic). An existing folder is moved aside only at the final
+  step, and only with `--force` or a Yes; it's never deleted. On failure the temporary folder is removed.
+- **Interrupts leave nothing half-done.** SIGINT, SIGTERM and SIGHUP stop pnpm and everything it started (its process
+  group; `taskkill /T` on Windows), remove the temporary folder, and report what's left. Child processes run detached
+  for this reason.
+- **The installed lockfile is a subset of the template's.** Installs run with `--no-frozen-lockfile` (a `CI` variable
+  would otherwise make every install fail), so `assertLockfileSubset` is the guard: a version the template didn't test
+  never lands.
+- **Windows command lines are built by hand.** A bare command name stays unquoted (a quoted one breaks `%~dp0` in npm's
+  `.cmd` shims); arguments containing `%`, `"` or a trailing `\` are rejected, because cmd.exe can't quote them
+  safely; cmd's 9009 maps to 127, "command not found".
+- **A failed first commit only warns.** The files are generated and correct, so the project still moves into place.
+- **The first commit uses `--no-verify`.** The generated pre-commit hook runs typecheck, which in a generated project
+  needs a build first; this repository's e2e tests already run that project's full CI on the same output.
 
 ## Setup Commands
 
@@ -31,16 +86,16 @@ Each package has its own `package.json`, `tsconfig.json`, and `src/` directory. 
 # Install dependencies (required first step)
 pnpm install
 
-# Build all packages (required before typecheck)
+# Build: tsc, Rollup and the template bundle (required before pnpm test)
 pnpm build
 
 # Lint all packages
 pnpm lint
 
-# Type check all packages (must run AFTER build)
+# Type check (no build needed)
 pnpm typecheck
 
-# Run all tests (runs from root using centralized vitest config)
+# Run the unit tests from the root (needs pnpm build: some tests run dist/cli.js)
 pnpm test
 
 # Watch mode for tests
@@ -60,38 +115,25 @@ pnpm clean
 
 ## Development Workflow
 
-### Working on a specific package
-
 ```bash
-# Build a specific package
-pnpm -F "<package-name>" build
-
-# Watch mode for development
-pnpm -F "<package-name>" dev
-
-# Run tests for a specific package (note: tests run from root)
-cd packages/<name> && pnpm test:watch
+pnpm -F create-ts-monorepo-starter build   # the same as pnpm build: there is one package
+pnpm -F create-ts-monorepo-starter dev     # tsc --watch into build/ (no bundle; run pnpm build before testing)
+pnpm test markers                          # only the test files whose path matches "markers"
+pnpm test:watch
 ```
-
-### Important: Build Order
-
-**Critical:** Always run `pnpm build` before `pnpm typecheck` because TypeScript needs the built `.d.ts` files from dependencies.
 
 ## Testing Instructions
 
-Tests use Vitest with a centralized configuration at the root (`vitest.config.ts`).
+Tests use Vitest with a centralized configuration at the root (`vitest.config.ts`); `pnpm test` runs from the root.
 
-- Test files: `**/*.test.ts` or `**/*.spec.ts` in `packages/*/src/`
-- Run from root: `pnpm test` (NOT `turbo test`)
-- The test script in root package.json runs `vitest run`, not `turbo test`
-- Unit tests live next to source (`packages/*/src/*.test.ts`)
-- `packages/cli/test/bin.test.ts` runs the *built* command, so `pnpm build` must run before `pnpm test`
-
-**When adding tests:**
-
-1. Place test files next to source files: `src/myModule.test.ts`
-2. Import from the source file: `import { MyClass } from './myModule'`
-3. Run `pnpm test` from root to verify
+- Unit tests live in `packages/cli/test/`, one file per module: `test/markers.test.ts` tests `src/markers.ts`. Import
+  from `../src/<module>`.
+- `bin.test.ts`, `cli.test.ts` and `pack.test.ts` run the built `dist/cli.js` or pack the package, so `pnpm build`
+  must run before `pnpm test`.
+- Modules take their side effects as parameters (`exec`, `prompts`, `cwd`, `generate`, ...), and tests pass fakes.
+  Follow that pattern instead of mocking modules.
+- `packages/cli/test/e2e/` is separate (`vitest.e2e.config.ts`, `pnpm test:e2e`): it needs the network and takes
+  minutes.
 
 ## Before Calling Work Done
 
@@ -120,7 +162,7 @@ and audit it with [zizmor](https://docs.zizmor.sh/) (`zizmor .github/workflows`)
 - Biome handles linting and formatting (config in `biome.json`)
 - Run `pnpm lint` to check, `pnpm format` to auto-fix
 - Conventional Commits enforced via Commitlint
-- Git hooks (Husky): **pre-commit** runs Biome with fixes on staged `.ts`/`.js` files and re-stages them, so a commit can rewrite your files; then `pnpm typecheck` (needs a prior `pnpm build`). **commit-msg** runs commitlint.
+- Git hooks (Husky): **pre-commit** runs Biome with fixes on staged `.ts`/`.js` files and re-stages them, so a commit can rewrite your files; then `pnpm typecheck`. **commit-msg** runs commitlint.
 
 **Commit message format:**
 
@@ -152,7 +194,6 @@ chore: update dependencies
 - `e2e` job: generates projects (`pnpm test:e2e`) with the built CLI (every combination of examples on Linux, the
   all-examples project on Windows) and runs each project's own CI
 - `fresh-machine` job: runs the built CLI with `-y` on Linux, macOS and Windows with no pnpm, pnpm 9 and pnpm 10
-- **Important:** Build runs BEFORE typecheck (required for type definitions)
 
 ### Template Main Workflow (`.github/workflows/template-main.yml`)
 
@@ -170,32 +211,20 @@ chore: update dependencies
 - **Never publishes by default:** `pack` and `publish` run only when the repository variable `NPM_PUBLISH` is `true`
 - To enable publishing: see CONTRIBUTING.md "Setting Up npm Publishing" (trusted publisher on npmjs.com, `npm` environment)
 
-## Adding a New Package
+## Taking a New Template Release
 
-Copy `packages/cli/` and rename it.
+The weekly `template-main.yml` fails with `Template vX.Y.Z is out; update packages/cli/template-version.json` when the
+template has a newer release. To take it:
 
-Every package keeps these, or `pnpm check:packages` fails or it publishes broken:
-
-- a `build` script that runs `pnpm run clean` (which deletes `dist` and `build`), `tsc` into `build/`, Rollup into `dist/cli.js`, and the template fetch into `dist/template`. Scripts use `node -e`
-  instead of `rm` or `chmod`, so they also run on Windows
-- `"engines": { "node": ">=22.13" }` for packages that run on Node, and `@types/node` 22.x if the package needs it
-- `"type": "module"` and a `bin` that points into `dist/` (no `exports` map: this is a bin-only package)
-- `"files": ["dist"]`: without it, `npm pack` follows `.gitignore` and ships no `dist/`
-- the `check:package` script (`scripts/check-package.mjs`: `publint --strict` on package.json and the bundle, minus the bundled template)
-
-Then run `pnpm install` to link it. Vitest picks up `packages/**/*.test.ts` automatically.
-
-## Package Dependencies
-
-Use workspace protocol for internal dependencies:
-
-```json
-"dependencies": {
-  "<package-name>": "workspace:*"
-}
-```
-
-Turborepo automatically builds dependencies in the correct order.
+1. Set `tag` and `commit` in `packages/cli/template-version.json` (the commit the tag points to:
+   `gh api repos/prosdevlab/ts-monorepo-starter/commits/<tag> --jq .sha`). The build refuses a tag and commit that
+   don't match.
+2. Run `pnpm build`, `pnpm test` and `pnpm test:e2e`. A `Template changed: ...` error means the template changed a line
+   `generate.ts` rewrites; a marker error means the template added a marker or file type `markers.ts` doesn't know
+   (it mirrors the template's `scripts/check-examples.mjs`). A new or renamed example also needs `EXAMPLES` in
+   `args.ts`, `EXAMPLE_DIRS` in `generate.ts` and `PACKAGES` in `run.ts`.
+3. Add a changeset (`patch` for a template patch release, otherwise `minor`): users get the new template only through a
+   new CLI release.
 
 ## Dependencies and the Lockfile
 
@@ -231,35 +260,7 @@ To publish:
    the calling workflow, and `ci.yml` calls `release.yml`
 4. Release workflow will publish on next version bump; never add an `NPM_TOKEN` secret
 
-## Common Patterns
-
-### Running commands in all packages
-
-```bash
-pnpm -r <command>  # Run in all packages
-turbo <command>    # Run via Turborepo with caching
-```
-
-### Filtering specific packages
-
-```bash
-pnpm -F "<package-name>" build
-pnpm --filter "create-ts-monorepo-starter" test
-```
-
-### Checking package locations
-
-```bash
-pnpm list --depth 0  # See all workspace packages
-```
-
 ## Troubleshooting
-
-**TypeScript errors about missing types:**
-
-- Run `pnpm build` first to generate `.d.ts` files
-- Check that dependencies are listed in package.json
-- Verify workspace links: `pnpm install`
 
 **Tests not found:**
 
@@ -290,9 +291,9 @@ pnpm list --depth 0  # See all workspace packages
 
 **Build failures:**
 
-- Check dependency order (dependencies build first)
-- Clear cache: `pnpm clean` then `pnpm build`
-- Remove node_modules: `pnpm clean && pnpm install`
+- `pnpm build` downloads the pinned template from GitHub, so it needs the network. A tag and commit that don't match
+  in `template-version.json` fail the build on purpose.
+- Start clean: `pnpm clean && pnpm install && pnpm build`
 
 **`ERR_PNPM_NO_MATURE_MATCHING_VERSION`:**
 
@@ -300,11 +301,6 @@ pnpm list --depth 0  # See all workspace packages
 - Choose an older version, or wait until it ages. Never add a `minimumReleaseAgeExclude` entry on your own:
   exceptions are for urgent security fixes, approved by a person (CONTRIBUTING.md "Dependency Updates").
 - If the young version is already in the lockfile, re-resolve (see "Dependencies and the Lockfile").
-
-**CI failures on typecheck:**
-
-- Ensure build step runs before typecheck in workflow
-- Local: `pnpm build && pnpm typecheck`
 
 ## Security Considerations
 

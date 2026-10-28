@@ -264,7 +264,7 @@ describe('run', () => {
     );
   });
 
-  it('warns and still moves the project into place when the commit fails (Ruling 11)', async () => {
+  it('warns and still moves the project into place when the commit fails', async () => {
     const ui = recordingUi();
     const exec = fakeExec({
       'git commit': { code: 1, stderr: 'error: gpg failed to sign the data' },
