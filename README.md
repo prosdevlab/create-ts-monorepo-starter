@@ -9,6 +9,8 @@ A command-line tool that creates a TypeScript monorepo from the
 Vitest, Changesets, and a CI that publishes to npm with provenance and no stored token. You pick which examples to
 keep, and get a project that passes its own CI on the first commit.
 
+![Running npm create ts-monorepo-starter@latest: choosing a folder, the @acme scope and the lib and cli examples, then installing and committing](docs/demo/demo.gif)
+
 ## Usage
 
 ```bash
@@ -106,7 +108,7 @@ create-ts-monorepo-starter/
 ├── .changeset/          # Changesets configuration
 ├── .github/             # Workflows, Dependabot and zizmor config, issue forms, PR template
 ├── .husky/              # Git hooks
-├── docs/                # Design and plans for the CLI
+├── docs/                # Design and plans for the CLI, and the README demo
 ├── packages/cli/        # The create-ts-monorepo-starter package
 ├── .editorconfig        # Editor defaults matching Biome's formatter
 ├── AGENTS.md            # Instructions for coding agents (CLAUDE.md imports it)
@@ -169,6 +171,12 @@ pnpm check:packages  # publint on the package
 into `dist/template`, then marks `dist/cli.js` executable. `clean` deletes `dist` and `build` first, so files from removed
 sources never ship. The package doesn't use `composite`: with it, `tsc` can skip writing anything after `build` is deleted.
 `TEMPLATE_REF=<branch> pnpm build` bundles that branch instead of the pinned release.
+
+#### The README Demo
+
+The GIF at the top of this README and of the npm page is recorded with [VHS](https://github.com/charmbracelet/vhs) from
+`docs/demo/demo.tape`. After the prompts or the output change, publish the new version first, then re-record from the
+repository root with `vhs docs/demo/demo.tape`: the tape runs the published package from npm in a throwaway folder.
 
 #### Generated-Project Tests and the Template
 
