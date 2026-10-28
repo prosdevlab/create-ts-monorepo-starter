@@ -168,7 +168,7 @@ chore: update dependencies
 - Four jobs: select-mode → version (opens the version PR) or pack → publish
 - Publishes with npm trusted publishing (OIDC): no npm token exists; only the `publish` job has `id-token: write`
 - **Never publishes by default:** `pack` and `publish` run only when the repository variable `NPM_PUBLISH` is `true`
-- To enable publishing: see README "Setting Up npm Publishing" (trusted publisher on npmjs.com, `npm` environment)
+- To enable publishing: see CONTRIBUTING.md "Setting Up npm Publishing" (trusted publisher on npmjs.com, `npm` environment)
 
 ## Adding a New Package
 
@@ -298,7 +298,7 @@ pnpm list --depth 0  # See all workspace packages
 
 - A version you asked for, or one a dependency needs, was published less than 3 days ago.
 - Choose an older version, or wait until it ages. Never add a `minimumReleaseAgeExclude` entry on your own:
-  exceptions are for urgent security fixes, approved by a person (README "Dependency Updates").
+  exceptions are for urgent security fixes, approved by a person (CONTRIBUTING.md "Dependency Updates").
 - If the young version is already in the lockfile, re-resolve (see "Dependencies and the Lockfile").
 
 **CI failures on typecheck:**
@@ -315,7 +315,7 @@ pnpm list --depth 0  # See all workspace packages
   GitHub's Dependabot alerts can't read pnpm 12's two-document lockfile, so they miss these dependencies
 - Nothing newer than 3 days installs: `minimumReleaseAge` in `pnpm-workspace.yaml` (minutes).
 - Agents never add `minimumReleaseAgeExclude` entries. A person may approve one exact version for an urgent security
-  fix, with the advisory linked, removed once it is 3 days old (README "Dependency Updates").
+  fix, with the advisory linked, removed once it is 3 days old (CONTRIBUTING.md "Dependency Updates").
 - Dependabot (`.github/dependabot.yml`) proposes updates once they're 3 days old and keeps GitHub Actions pinned to commit
   SHAs. Its `cooldown` must equal pnpm's `minimumReleaseAge`, and so must `days` in `.github/zizmor.yml`. It doesn't update `devEngines.runtime`, `ZIZMOR_VERSION` or
   `@types/node` majors: those are raised by hand.
