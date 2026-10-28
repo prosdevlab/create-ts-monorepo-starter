@@ -32,7 +32,7 @@ export interface RunPlan {
   replace?: boolean;
 }
 
-/** `failed`: git init or the first commit failed and was reported with `ui.warn` (Ruling 11). */
+/** `failed`: git init or the first commit failed and was reported with `ui.warn`. */
 type GitOutcome = 'committed' | 'no-identity' | 'no-git' | 'inside-repo' | 'off' | 'failed';
 
 export interface RunResult {
@@ -264,7 +264,7 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
       try {
         outcome = await initAndCommit(temp, message, exec);
       } catch (error) {
-        // Ruling 11: the files are generated and correct, so a failed commit only warns.
+        // The files are generated and correct, so a failed commit only warns.
         outcome = 'failed';
         ui.warn("Couldn't make the first commit", [
           firstLine(error),
