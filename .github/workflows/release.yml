@@ -62,7 +62,7 @@ jobs:
   # Version PR merged: build and pack, with read-only access.
   pack:
     needs: select-mode
-    # Off until the repository variable NPM_PUBLISH is 'true' (README "Setting Up npm Publishing"); no npm token exists.
+    # Off until the repository variable NPM_PUBLISH is 'true' (CONTRIBUTING.md "Setting Up npm Publishing"); no npm token exists.
     if: needs.select-mode.outputs.mode == 'publish' && vars.NPM_PUBLISH == 'true'
     runs-on: ubuntu-latest
     permissions:

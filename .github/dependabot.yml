@@ -1,4 +1,4 @@
-# Dependency update PRs, weekly, only for releases at least 3 days old (README "Dependency Updates").
+# Dependency update PRs, weekly, only for releases at least 3 days old (CONTRIBUTING.md "Dependency Updates").
 # Keep cooldown equal to minimumReleaseAge in pnpm-workspace.yaml, or Dependabot opens PRs pnpm refuses.
 version: 2
 updates:
