@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { versionText } from '../src/ui';
@@ -34,6 +34,36 @@ function cli(args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
     encoding: 'utf8',
     timeout: 60_000,
   });
+}
+
+/**
+ * Puts a stand-in `pnpm` first on PATH: it answers `--version` with 12.15.0, logs every other
+ * call's arguments to the returned file, and exits 0. A real `pnpm install --lockfile-only`
+ * fetches metadata from the npm registry, so a slow registry would time this test out; the e2e
+ * tests cover real pnpm.
+ */
+function fakePnpm(): string {
+  const dir = join(root, 'fake-bin');
+  mkdirSync(dir);
+  const calls = join(root, 'pnpm-calls.txt');
+  writeFileSync(
+    join(dir, 'pnpm.mjs'),
+    `import { appendFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+if (args[0] === '--version') console.log('12.15.0');
+else appendFileSync(${JSON.stringify(calls)}, args.join(' ') + '\\n');
+`
+  );
+  writeFileSync(
+    join(dir, 'pnpm'),
+    `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/pnpm.mjs" "$@"\n`,
+    { mode: 0o755 }
+  );
+  writeFileSync(join(dir, 'pnpm.cmd'), `@"${process.execPath}" "%~dp0pnpm.mjs" %*\r\n`);
+  // Windows spells the variable Path; keep whichever name the environment uses.
+  const key = Object.keys(env).find((name) => name.toUpperCase() === 'PATH') ?? 'PATH';
+  env[key] = `${dir}${delimiter}${env[key] ?? ''}`;
+  return calls;
 }
 
 describe('cli', () => {
@@ -73,6 +103,7 @@ describe('cli', () => {
   });
 
   it('creates a committed project without installing, and no colour with NO_COLOR', () => {
+    const calls = fakePnpm();
     const result = cli(['proj', '--no-install', '-y'], { NO_COLOR: '1' });
     expect(result.stderr).toBe('');
     expect(result.status).toBe(0);
@@ -94,5 +125,6 @@ describe('cli', () => {
       ),
     ]);
     expect(readdirSync(root).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
+    expect(readFileSync(calls, 'utf8')).toBe('install --no-frozen-lockfile --lockfile-only\n');
   }, 60_000);
 });
