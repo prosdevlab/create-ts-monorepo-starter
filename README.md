@@ -226,7 +226,7 @@ The release workflow never publishes until the repository variable `NPM_PUBLISH`
 
    1. From a clean, built checkout (`pnpm install --frozen-lockfile && pnpm build`), set `"version": "0.0.0"` in `packages/cli/package.json` (don't commit it).
    2. In `packages/cli`, run `npm publish --access public` with two-factor authentication, then restore the version (`git checkout packages/cli/package.json`).
-   3. Add the trusted publisher as above: repository `prosdevlab/create-ts-monorepo-starter`, workflow `ci.yml`, environment `npm`. Then do steps 3 and 4 below, and merge the version PR: CI publishes the real release.
+   3. Add the trusted publisher as above: repository `prosdevlab/create-ts-monorepo-starter`, workflow `ci.yml`, environment `npm`. Then do steps 3 and 4 below. CI publishes the real release on the next push to `main`, or when the latest CI run on `main` is re-run.
 3. In the same settings, under **Publishing access**, choose **Require two-factor authentication and disallow tokens**. Trusted publishing keeps working; a leaked token can't publish.
 4. In GitHub, under **Settings → Actions → General**, enable **Allow GitHub Actions to create and approve pull requests**, so the workflow can open the version PR. Then set the repository variable `NPM_PUBLISH` to `true` (**Settings → Secrets and variables → Actions → Variables**). Optionally, add required reviewers to the `npm` environment (**Settings → Environments**) to approve each publish.
 
