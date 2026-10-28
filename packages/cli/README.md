@@ -5,6 +5,8 @@ Create a TypeScript monorepo for CLIs, libraries and browser libraries from the
 Changesets, CI and a release workflow, plus the example packages you pick. The project passes its own CI on the first
 commit.
 
+![Running npm create ts-monorepo-starter@latest: choosing a folder, the @acme scope and the lib and cli examples, then installing and committing](https://raw.githubusercontent.com/prosdevlab/create-ts-monorepo-starter/main/docs/demo/demo.gif)
+
 ```bash
 npm create ts-monorepo-starter@latest my-tools
 pnpm create ts-monorepo-starter my-tools
