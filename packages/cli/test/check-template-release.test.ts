@@ -27,9 +27,7 @@ describe('check-template-release', () => {
   it('fails naming the latest release when the pinned tag is behind', () => {
     const result = check('v0.0.0', 'v2.3.0');
     expect(result.status).toBe(1);
-    expect(result.stderr.trim()).toBe(
-      'Template v2.3.0 is out; update packages/cli/template-version.json'
-    );
+    expect(result.stderr.trim()).toBe('Template v2.3.0 is out; run pnpm update-template');
   });
 
   it('passes when the pinned tag is the latest release', () => {
