@@ -20,6 +20,7 @@
     "prepare": "husky",
     "lint-staged": "biome check --write --no-errors-on-unmatched",
     "changeset": "changeset",
+    "update-template": "node packages/cli/scripts/update-template.mjs",
     "version": "changeset version",
     "release": "pnpm build && changeset publish"
   },

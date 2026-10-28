@@ -16,7 +16,7 @@ if (!latest) {
   process.exit(1);
 }
 if (latest !== tag) {
-  console.error(`Template ${latest} is out; update packages/cli/template-version.json`);
+  console.error(`Template ${latest} is out; run pnpm update-template`);
   process.exit(1);
 }
 console.log(`Template ${tag} is the latest release.`);

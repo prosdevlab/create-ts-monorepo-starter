@@ -213,18 +213,18 @@ chore: update dependencies
 
 ## Taking a New Template Release
 
-The weekly `template-main.yml` fails with `Template vX.Y.Z is out; update packages/cli/template-version.json` when the
-template has a newer release. To take it:
+The weekly `template-main.yml` fails with `Template vX.Y.Z is out; run pnpm update-template` when the template has a
+newer release. Claude Code has a skill for this, `.claude/skills/update-template`; the steps are the same without it:
 
-1. Set `tag` and `commit` in `packages/cli/template-version.json` (the commit the tag points to:
-   `gh api repos/prosdevlab/ts-monorepo-starter/commits/<tag> --jq .sha`). The build refuses a tag and commit that
-   don't match.
-2. Run `pnpm build`, `pnpm test` and `pnpm test:e2e`. A `Template changed: ...` error means the template changed a line
+1. `pnpm update-template` (or `pnpm update-template vX.Y.Z`). It pins the tag and its commit in
+   `packages/cli/template-version.json`, adds `.changeset/template-vX-Y-Z.md` (patch for a template patch release,
+   otherwise minor; users get the new template only through a new CLI release), and prints the release notes of every
+   release since the pinned one. Read them: they say what changed for existing projects.
+2. `pnpm build && pnpm test && pnpm test:e2e`. A `Template changed: ...` error means the template changed a line
    `generate.ts` rewrites; a marker error means the template added a marker or file type `markers.ts` doesn't know
    (it mirrors the template's `scripts/check-examples.mjs`). A new or renamed example also needs `EXAMPLES` in
    `args.ts`, `EXAMPLE_DIRS` in `generate.ts` and `PACKAGES` in `run.ts`.
-3. Add a changeset (`patch` for a template patch release, otherwise `minor`): users get the new template only through a
-   new CLI release.
+3. Open a PR. Its CI rebuilds the bundle from the pinned commit and runs everything again on three operating systems.
 
 ## Dependencies and the Lockfile
 
