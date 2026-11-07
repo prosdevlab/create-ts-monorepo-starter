@@ -11,7 +11,10 @@ const script = fileURLToPath(new URL('../scripts/update-template.mjs', import.me
 const REPO = 'o/r';
 
 // A stand-in for the GitHub API: the given releases, newest first, and a commit per tag.
-function github(releases: { tag_name: string; body?: string }[]): Promise<Server> {
+function github(
+  releases: { tag_name: string; body?: string }[],
+  listStatus = 200
+): Promise<Server> {
   const server = createServer((request, response) => {
     const url = request.url ?? '';
     const send = (status: number, body: unknown) => {
@@ -21,7 +24,8 @@ function github(releases: { tag_name: string; body?: string }[]): Promise<Server
     const tagged = /^\/repos\/o\/r\/releases\/tags\/(.+)$/.exec(url);
     const commit = /^\/repos\/o\/r\/commits\/(.+)$/.exec(url);
     if (url === '/repos/o/r/releases/latest') send(200, releases[0]);
-    else if (url.startsWith('/repos/o/r/releases?')) send(200, releases);
+    else if (url.startsWith('/repos/o/r/releases?'))
+      send(listStatus, listStatus === 200 ? releases : { message: 'Bad Gateway' });
     else if (tagged) {
       const found = releases.find((release) => release.tag_name === tagged[1]);
       send(found ? 200 : 404, found ?? { message: 'Not Found' });
@@ -46,9 +50,10 @@ afterEach(() => {
 async function update(
   pinned: string,
   releases: { tag_name: string; body?: string }[],
-  args: string[] = []
+  args: string[] = [],
+  listStatus = 200
 ) {
-  server = await github(releases);
+  server = await github(releases, listStatus);
   const { port } = server.address() as AddressInfo;
   const file = join(dir, 'template-version.json');
   writeFileSync(
@@ -132,6 +137,14 @@ describe('update-template', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('older than the pinned v2.3.0');
     expect(pinnedFile().tag).toBe('v2.3.0');
+  });
+
+  it('writes nothing when the release notes cannot be read', async () => {
+    const result = await update('v2.3.0', [{ tag_name: 'v2.4.0' }], [], 502);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('GitHub answered 502');
+    expect(pinnedFile()).toEqual({ repository: REPO, tag: 'v2.3.0', commit: 'old' });
+    expect(changesets()).toEqual([]);
   });
 
   it('fails without writing anything when the release does not exist', async () => {

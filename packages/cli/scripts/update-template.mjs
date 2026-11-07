@@ -51,6 +51,14 @@ if (cmp === 0) {
 if (cmp > 0) fail(`Template ${tag} is older than the pinned ${pinned.tag}; refusing to go back`);
 
 const { sha } = await get(`/repos/${repository}/commits/${tag}`);
+// Every release since the pinned one, oldest first: skipped releases can change things too.
+// Read before anything is written, so a failed request leaves the pin as it was.
+const releases = (await get(`/repos/${repository}/releases?per_page=100`))
+  .map((entry) => ({ entry, match: TAG.exec(entry.tag_name ?? '') }))
+  .filter(({ match }) => match)
+  .map(({ entry, match }) => ({ entry, version: order(match) }))
+  .filter(({ version }) => compare(version, a) > 0 && compare(version, b) <= 0)
+  .sort((x, y) => compare(x.version, y.version));
 // A template patch release is a CLI patch; anything bigger is a CLI minor (the CLI is 0.x).
 const bump = a[0] === b[0] && a[1] === b[1] ? 'patch' : 'minor';
 
@@ -64,13 +72,6 @@ writeFileSync(
 console.log(`Template ${pinned.tag} -> ${tag} (${sha})`);
 console.log(`Updated ${versionFile}`);
 console.log(`Added ${changeset} (${bump})`);
-// Every release since the pinned one, oldest first: skipped releases can change things too.
-const releases = (await get(`/repos/${repository}/releases?per_page=100`))
-  .map((entry) => ({ entry, match: TAG.exec(entry.tag_name ?? '') }))
-  .filter(({ match }) => match)
-  .map(({ entry, match }) => ({ entry, version: order(match) }))
-  .filter(({ version }) => compare(version, a) > 0 && compare(version, b) <= 0)
-  .sort((x, y) => compare(x.version, y.version));
 for (const { entry } of releases) {
   console.log(`\n## ${entry.tag_name}\n`);
   console.log((entry.body ?? '').trim() || '(no release notes)');
