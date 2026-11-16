@@ -82,6 +82,7 @@ pnpm lint            # Biome
 pnpm format          # Biome, with fixes
 pnpm typecheck       # no build needed
 pnpm check:unused    # knip
+pnpm check:changesets # every changeset parses and names a real package
 pnpm check:packages  # publint on the package
 ```
 
