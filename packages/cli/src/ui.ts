@@ -50,6 +50,7 @@ Options
   --no-install        don't install dependencies
   --force             move a non-empty folder aside first
   -y, --yes           accept every default, ask nothing
+  --check             check that pnpm is ready, create nothing
   -h, --help          show this help
   -v, --version       show the CLI and template versions
 

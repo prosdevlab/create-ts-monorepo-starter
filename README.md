@@ -38,8 +38,8 @@ With npm, put `--` before the options. pnpm and yarn pass them through without i
 
 - **What it asks:** the folder, then "Use the recommended setup?". Only if you answer No does it ask for the npm scope, the
   examples, git and the install.
-- **What it does:** copies the template, renames the scope, removes the examples you didn't pick, runs `git init`,
-  installs, and makes the first commit. If git has no `user.name` or `user.email`, it stages the files and tells you
+- **What it does:** checks that your pnpm can switch to the template's pnpm, copies the template, renames the scope,
+  removes the examples you didn't pick, runs `git init`, installs, and makes the first commit. If git has no `user.name` or `user.email`, it stages the files and tells you
   instead.
 - **Without prompts:** `-y` accepts every default and asks nothing. So does a run where stdin or stdout isn't a terminal.
   Both need the folder argument, or the CLI stops with a usage error.
@@ -58,11 +58,22 @@ With npm, put `--` before the options. pnpm and yarn pass them through without i
 | `--no-install` | Don't install dependencies; the lockfile is still updated | install |
 | `--force` | Move a non-empty folder aside first | refuse (asks when interactive) |
 | `-y`, `--yes` | Accept every default, ask nothing | ask |
+| `--check` | Check that your pnpm can switch to the template's pnpm, and create nothing | |
 | `-h`, `--help` | Show the help | |
 | `-v`, `--version` | Show the CLI and template versions | |
 
 The package name comes from the folder's name, with unsafe characters turned into `-`: `My Tools` becomes `my-tools`. A
 name with nothing valid left is rejected. At the prompt, pressing Enter uses `my-ts-monorepo`.
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Done (with `--check`: ready) |
+| 1 | Something failed; the message says what, and a failure before the final move leaves nothing behind |
+| 2 | Usage error: a flag, the folder or the scope |
+| 3 | Your pnpm needs fixing first; nothing was created, and the message says what to run |
+| 130 | Interrupted |
 
 ## What you get
 
@@ -81,7 +92,11 @@ Nothing publishes until you opt in; the generated README says how, and the CLI's
 The generated project needs pnpm 12, which brings its own pinned Node.js. The CLI itself runs on Node 22.13 or later,
 with any package manager:
 
-- pnpm 10.26 or newer switches itself to pnpm 12 for the project, so the install just works.
+- pnpm 10.26 or newer switches itself to pnpm 12 for the project. The CLI tries that switch before it creates anything;
+  if the switch fails, it exits with 3, creates nothing, and prints what to run. `--check` runs only this check.
+- A known failure: pnpm downloads pnpm 12 but doesn't run its install script, and reports `Failed to switch pnpm to
+  v12... Looks like pnpm CLI is missing at ".../bin" or is incorrect`. Running that script fixes it:
+  `node <the folder before /bin>/node_modules/pnpm/install.js`. The CLI prints the exact command.
 - No pnpm: the CLI installs with `npm exec` and says that commits need pnpm, with the command to install it.
 - pnpm older than 10.26: the CLI stops before installing and prints the upgrade command, because such a pnpm can't
   switch itself to pnpm 12 (pnpm 9 would also ignore the pinned pnpm and rewrite the lockfile).

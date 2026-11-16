@@ -5,7 +5,14 @@ import { generate } from './generate.js';
 import { initAndCommit, insideGitRepo } from './git.js';
 import { assertLockfileSubset } from './lockfile.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
-import { defaultExec, detectPnpm, type Exec, installCommand, type PnpmStatus } from './pnpm.js';
+import {
+  checkSwitch,
+  defaultExec,
+  detectPnpm,
+  type Exec,
+  installCommand,
+  type PnpmStatus,
+} from './pnpm.js';
 import { cliVersion, pnpmSpec, templateDir, templateLabel } from './template.js';
 import { CANCELLED, type Ui } from './ui.js';
 import {
@@ -181,6 +188,12 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     },
   });
   try {
+    // pnpm first: a pnpm that can't switch to the template's version stops the run before any file.
+    const spec = pnpmSpec(await readFile(join(from, 'package.json'), 'utf8'));
+    const pin = spec.slice('pnpm@'.length);
+    const pnpm = await detectPnpm(exec);
+    if (pnpm.kind === 'ok') await checkSwitch(spec, pnpm.version, exec);
+
     await (deps.generate ?? generate)({
       from,
       to: temp,
@@ -215,8 +228,6 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
       }
     }
 
-    const pin = pnpmSpec(await readFile(join(from, 'package.json'), 'utf8')).slice('pnpm@'.length);
-    const pnpm = await detectPnpm(exec);
     const command = installCommand(pnpm, temp, !plan.install);
     let installed = false;
     let seconds = 0;

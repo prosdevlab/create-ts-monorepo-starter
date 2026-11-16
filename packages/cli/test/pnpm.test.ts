@@ -1,16 +1,20 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  checkSwitch,
   defaultExec,
   detectInvoker,
   detectPnpm,
   type Exec,
   hasLiveChildren,
   installCommand,
+  PNPM_HELP,
   quoteWindowsArg,
   stopChildren,
+  switchFailure,
+  switchInstaller,
   windowsCommandLine,
 } from '../src/pnpm';
 
@@ -69,6 +73,99 @@ describe('detectPnpm', () => {
     expect(calls).toEqual([
       ['pnpm', ['--version'], { cwd: tmpdir() }],
       ['pnpm', ['--version'], { cwd: '/parent' }],
+    ]);
+  });
+});
+
+/** What pnpm 10.28.0 printed on macOS when its switch to 12.15.0 left a shell shim in place. */
+const switchError = (tools: string) =>
+  `ERROR  Failed to switch pnpm to v12.15.0. Looks like pnpm CLI is missing at "${tools}/bin" or is incorrect\n` +
+  `spawnSync ${tools}/bin/pnpm Unknown system error -8\n`;
+
+describe('checkSwitch', () => {
+  let root: string;
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'ctms-switch-'));
+  });
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('runs pnpm --version in a folder pinned to the version, then removes it', async () => {
+    const seen: { cwd: string; manifest: string }[] = [];
+    const exec: Exec = async (_cmd, _args, { cwd }) => {
+      seen.push({ cwd, manifest: readFileSync(join(cwd, 'package.json'), 'utf8') });
+      return { code: 0, stdout: '12.15.0\n', stderr: '' };
+    };
+    await checkSwitch('pnpm@12.15.0', '10.28.0', exec, root);
+    expect(seen).toHaveLength(1);
+    expect(JSON.parse(seen[0]?.manifest ?? '')).toEqual({ packageManager: 'pnpm@12.15.0' });
+    expect(existsSync(seen[0]?.cwd ?? '')).toBe(false);
+  });
+
+  it('throws a ToolchainError when the switch fails, and still removes the folder', async () => {
+    let cwd = '';
+    const exec: Exec = async (_cmd, _args, opts) => {
+      cwd = opts.cwd;
+      return { code: 1, stdout: '', stderr: switchError('/nowhere/12.15.0') };
+    };
+    const error = await checkSwitch('pnpm@12.15.0', '10.28.0', exec, root, async () => false).catch(
+      (e: unknown) => e
+    );
+    expect(error).toMatchObject({ name: 'ToolchainError' });
+    expect((error as { lines: string[] }).lines).toContain(
+      `Fix your pnpm so it can switch to 12.15.0: ${PNPM_HELP}`
+    );
+    expect(existsSync(cwd)).toBe(false);
+  });
+
+  it('offers the install script only when it exists', async () => {
+    const exec: Exec = async () => ({ code: 1, stdout: '', stderr: switchError('/t') });
+    const asked: string[] = [];
+    const exists = async (path: string) => {
+      asked.push(path);
+      return true;
+    };
+    const error = await checkSwitch('pnpm@12.15.0', '10.28.0', exec, root, exists).catch(
+      (e: unknown) => e
+    );
+    expect(asked).toEqual([join('/t', 'node_modules', 'pnpm', 'install.js')]);
+    expect((error as { lines: string[] }).lines).toContain(`Fix: node ${asked[0]}`);
+  });
+});
+
+describe('switchInstaller', () => {
+  it("reads the install script's path from pnpm's error", () => {
+    expect(switchInstaller(switchError('/home/me/.tools/pnpm/12.15.0'))).toBe(
+      join('/home/me/.tools/pnpm/12.15.0', 'node_modules', 'pnpm', 'install.js')
+    );
+  });
+
+  it('is undefined for any other output', () => {
+    expect(switchInstaller('')).toBeUndefined();
+    expect(switchInstaller('ERR_PNPM_SOMETHING_ELSE')).toBeUndefined();
+  });
+});
+
+describe('switchFailure', () => {
+  it("names pnpm's error, the install script that fixes it, and the retry", () => {
+    const error = switchFailure('pnpm@12.15.0', '10.28.0', switchError('/t'), '/t/install.js');
+    expect(error).toMatchObject({
+      name: 'ToolchainError',
+      message: "pnpm 10.28.0 couldn't switch to pnpm 12.15.0, which this project needs",
+    });
+    expect(error.lines).toEqual([
+      expect.stringMatching(/^pnpm: ERROR {2}Failed to switch pnpm to v12\.15\.0\./),
+      'pnpm: spawnSync /t/bin/pnpm Unknown system error -8',
+      'Fix: node /t/install.js',
+      'Then run this command again. Nothing was created.',
+    ]);
+  });
+
+  it('points to the README without an install script to run', () => {
+    expect(switchFailure('pnpm@12.15.0', '10.28.0', '').lines).toEqual([
+      `Fix your pnpm so it can switch to 12.15.0: ${PNPM_HELP}`,
+      'Then run this command again. Nothing was created.',
     ]);
   });
 });

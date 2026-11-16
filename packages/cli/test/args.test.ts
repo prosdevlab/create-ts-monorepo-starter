@@ -26,8 +26,13 @@ describe('parseArgv', () => {
       yes: false,
       help: false,
       version: false,
+      check: false,
     };
     expect(options([])).toEqual(defaults);
+  });
+
+  it('reads --check', () => {
+    expect(options(['--check'])).toMatchObject({ check: true });
   });
 
   it('reads a folder and -y', () => {

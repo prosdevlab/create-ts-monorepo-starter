@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { constants, tmpdir } from 'node:os';
-import { dirname, isAbsolute } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { pnpmSpec } from './template.js';
 
 export type PnpmStatus =
@@ -177,6 +178,87 @@ export async function detectPnpm(
   if (!match) return { kind: 'none' };
   const [major, minor] = [Number(match[1]), Number(match[2])];
   return { kind: major < 10 || (major === 10 && minor < 26) ? 'old' : 'ok', version };
+}
+
+/** A toolchain problem the user has to fix before anything is created; `lines` say how. */
+export class ToolchainError extends Error {
+  constructor(
+    message: string,
+    readonly lines: string[]
+  ) {
+    super(message);
+    this.name = 'ToolchainError';
+  }
+}
+
+export const PNPM_HELP = 'https://github.com/prosdevlab/create-ts-monorepo-starter#pnpm';
+
+/** Whether a file exists; injected so `checkSwitch` stays testable without a real pnpm. */
+export type Exists = (path: string) => Promise<boolean>;
+
+const fileExists: Exists = (path) =>
+  access(path).then(
+    () => true,
+    () => false
+  );
+
+/**
+ * Runs `pnpm --version` in an empty folder pinned to `spec` (`pnpm@12.15.0`), where pnpm switches
+ * itself to that version as the install will. Throws a ToolchainError when the switch fails.
+ */
+export async function checkSwitch(
+  spec: string,
+  found: string,
+  exec: Exec = defaultExec,
+  root: string = tmpdir(),
+  exists: Exists = fileExists
+): Promise<void> {
+  const dir = await mkdtemp(join(root, 'ctms-pnpm-'));
+  try {
+    await writeFile(join(dir, 'package.json'), `${JSON.stringify({ packageManager: spec })}\n`);
+    const result = await exec('pnpm', ['--version'], { cwd: dir }).catch(() => null);
+    if (result?.code === 0) return;
+    const output = result ? `${result.stdout}\n${result.stderr}` : '';
+    const installer = switchInstaller(output);
+    const runnable = installer !== undefined && (await exists(installer));
+    throw switchFailure(spec, found, output, runnable ? installer : undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The install script of the pnpm a failed switch downloaded, read from pnpm's error: it says the CLI
+ * "is missing at <tools>/bin" when the script that puts the binary there never ran.
+ */
+export function switchInstaller(output: string): string | undefined {
+  const tools = /missing at "([^"]+?)[\\/]bin"/.exec(output)?.[1];
+  return tools === undefined ? undefined : join(tools, 'node_modules', 'pnpm', 'install.js');
+}
+
+/** The stop for a failed switch: pnpm's words, the fix (`installer`, or the README), and a retry. */
+export function switchFailure(
+  spec: string,
+  found: string,
+  output: string,
+  installer?: string
+): ToolchainError {
+  const version = spec.slice('pnpm@'.length);
+  const said = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 2);
+  return new ToolchainError(
+    `pnpm ${found} couldn't switch to pnpm ${version}, which this project needs`,
+    [
+      ...said.map((line) => `pnpm: ${line}`),
+      installer
+        ? `Fix: node ${installer}`
+        : `Fix your pnpm so it can switch to ${version}: ${PNPM_HELP}`,
+      'Then run this command again. Nothing was created.',
+    ]
+  );
 }
 
 /** The package manager that ran us, from `npm_config_user_agent`; unknown means npm. */

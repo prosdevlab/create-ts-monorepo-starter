@@ -139,10 +139,11 @@ describe('run', () => {
     const result = await run(plan(), ui, deps());
     expect(log.map((line) => line.replace(/-m .*/, '-m <message>'))).toEqual([
       'interrupt',
+      'pnpm --version',
+      'pnpm --version',
       'generate',
       'git rev-parse --is-inside-work-tree',
       'git init -q -b main',
-      'pnpm --version',
       'pnpm install --no-frozen-lockfile',
       'git init -q -b main',
       'git add -A',
@@ -191,7 +192,13 @@ describe('run', () => {
     });
     await expect(run(plan(), recordingUi(), failing)).rejects.toThrow('disk full');
     expect(leftovers()).toEqual([]);
-    expect(log).toEqual(['interrupt', 'generate', 'unregister']);
+    expect(log).toEqual([
+      'interrupt',
+      'pnpm --version',
+      'pnpm --version',
+      'generate',
+      'unregister',
+    ]);
   });
 
   it('skips the install when pnpm is too old, and still commits', async () => {
@@ -353,7 +360,29 @@ describe('run', () => {
     expect(await readdir(target)).toEqual(['package.json', 'pnpm-lock.yaml']);
   });
 
-  it('runs pnpm --version in the temp folder, outside any project', async () => {
+  it('stops before generating when pnpm cannot switch to the template version', async () => {
+    const exec = fakeExec({
+      'pnpm --version': async (cwd) =>
+        cwd === tmpdir()
+          ? { code: 0, stdout: '10.28.0\n' }
+          : { code: 1, stderr: 'ERROR  Failed to switch pnpm to v12.15.0.' },
+    });
+    const error = await run(plan(), recordingUi(), deps({ exec })).catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      name: 'ToolchainError',
+      message: "pnpm 10.28.0 couldn't switch to pnpm 12.15.0, which this project needs",
+    });
+    expect(log).not.toContain('generate');
+    expect(log.at(-1)).toBe('unregister');
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('skips the switch check when pnpm is missing or too old', async () => {
+    await run(plan(), recordingUi(), deps({ exec: fakeExec({ 'pnpm --version': { code: 127 } }) }));
+    expect(log.filter((line) => line === 'pnpm --version')).toHaveLength(1);
+  });
+
+  it('runs pnpm --version outside any project, then in a folder pinned to the template pnpm', async () => {
     const cwds: string[] = [];
     const base = fakeExec();
     const exec: Exec = async (cmd, args, opts) => {
@@ -361,7 +390,7 @@ describe('run', () => {
       return base(cmd, args, opts);
     };
     await run(plan(), recordingUi(), deps({ exec }));
-    expect(cwds).toEqual([tmpdir()]);
+    expect(cwds).toEqual([tmpdir(), expect.stringContaining(join(tmpdir(), 'ctms-pnpm-'))]);
   });
 
   it('never touches a non-empty target without replace', async () => {
