@@ -13,6 +13,7 @@ export interface Options {
   yes: boolean;
   help: boolean;
   version: boolean;
+  check: boolean;
 }
 
 export type ParseResult = { ok: true; options: Options } | { ok: false; message: string };
@@ -70,6 +71,7 @@ export function parseArgv(argv: string[]): ParseResult {
     yes: values.yes ?? false,
     help: values.help ?? false,
     version: values.version ?? false,
+    check: values.check ?? false,
   };
   if (positionals[0] !== undefined) options.folder = positionals[0];
   if (values.scope !== undefined) options.scope = values.scope;
@@ -96,6 +98,7 @@ function parse(argv: string[]) {
       yes: { type: 'boolean', short: 'y' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
+      check: { type: 'boolean' },
     },
   });
 }

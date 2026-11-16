@@ -3,7 +3,9 @@ import { basename } from 'node:path';
 import { EXAMPLES, type Options, parseArgv } from './args.js';
 import { gitIdentity } from './git.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
+import { checkSwitch, detectPnpm, type Exec, ToolchainError } from './pnpm.js';
 import { planFromOptions, RunError, type RunPlan, run } from './run.js';
+import { pnpmSpec } from './template.js';
 import {
   type Ask,
   CANCELLED,
@@ -20,6 +22,8 @@ import { backupPath, targetState } from './workspace.js';
 
 const USAGE = 2;
 export const FAILURE = 1;
+/** The machine needs fixing first (pnpm can't switch versions, or is too old); nothing was created. */
+export const TOOLCHAIN = 3;
 const INTERRUPTED = 130;
 
 const usage = (message: string) => {
@@ -94,6 +98,10 @@ function report(ui: Ui, error: unknown): number {
     ui.fail(CANCELLED, []);
     return INTERRUPTED;
   }
+  if (error instanceof ToolchainError) {
+    ui.fail(error.message, error.lines);
+    return TOOLCHAIN;
+  }
   if (error instanceof RunError) {
     ui.fail(error.message, error.lines);
     return FAILURE;
@@ -112,6 +120,39 @@ export interface MainIo {
   interactive?: boolean;
   ui?: Ui;
   prompts?: Prompts;
+  /** Runs commands for `--check`. */
+  exec?: Exec;
+}
+
+/** `--check`: is this machine's pnpm ready for the template's? Creates nothing. */
+async function check(ui: Ui, exec: Exec | undefined): Promise<number> {
+  const spec = pnpmSpec();
+  const version = spec.slice('pnpm@'.length);
+  ui.intro();
+  const pnpm = await detectPnpm(exec);
+  if (pnpm.kind === 'none') {
+    ui.warn("pnpm isn't installed", [
+      `Creating works: the install uses a temporary pnpm ${version} (npm exec).`,
+      `Working in the project needs pnpm 10.26 or newer: https://pnpm.io/installation`,
+    ]);
+    return 0;
+  }
+  if (pnpm.kind === 'old') {
+    ui.fail(`pnpm ${pnpm.version} is too old for this project`, [
+      `This project needs pnpm 10.26 or newer, which switches itself to pnpm ${version}.`,
+      'Upgrade pnpm (https://pnpm.io/installation), then run --check again.',
+    ]);
+    return TOOLCHAIN;
+  }
+  try {
+    await checkSwitch(spec, pnpm.version, exec);
+  } catch (error) {
+    if (!(error instanceof ToolchainError)) throw error;
+    ui.fail(error.message, error.lines);
+    return TOOLCHAIN;
+  }
+  ui.step(`Ready: pnpm ${pnpm.version} switches to pnpm ${version} for this project`);
+  return 0;
 }
 
 /** Runs the command and resolves with its exit code. */
@@ -127,6 +168,7 @@ export async function main(argv: string[], io: MainIo = {}): Promise<number> {
     process.stdout.write(`${versionText()}\n`);
     return 0;
   }
+  if (options.check) return check(io.ui ?? plainUi(), io.exec);
   const cwd = io.cwd ?? process.cwd();
   const interactive =
     !options.yes && (io.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY));
