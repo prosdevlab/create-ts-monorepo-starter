@@ -5,7 +5,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   checkSwitch,
   defaultExec,
-  detectInvoker,
   detectPnpm,
   type Exec,
   hasLiveChildren,
@@ -167,17 +166,6 @@ describe('switchFailure', () => {
       `Fix your pnpm so it can switch to 12.15.0: ${PNPM_HELP}`,
       'Then run this command again. Nothing was created.',
     ]);
-  });
-});
-
-describe('detectInvoker', () => {
-  it('reads the first token of the user agent', () => {
-    expect(detectInvoker('pnpm/12.15.0 npm/? node/v24.12.0 darwin arm64')).toBe('pnpm');
-    expect(detectInvoker('npm/11.6.2 node/v24.12.0')).toBe('npm');
-    expect(detectInvoker('yarn/4.9.0 npm/? node/v24.12.0')).toBe('yarn');
-    expect(detectInvoker('bun/1.3.0')).toBe('bun');
-    expect(detectInvoker('deno/2.0.0')).toBe('npm');
-    expect(detectInvoker(undefined)).toBe('npm');
   });
 });
 

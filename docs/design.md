@@ -18,7 +18,7 @@ They build three kinds of thing, and the template already has an example of each
 
 **Goals**
 
-- One command with any package manager: `npm create`, `pnpm create`, `yarn create` or `bun create`.
+- One command, started with npm or pnpm: `npm create` or `pnpm create`. yarn and bun were dropped on 2026-11-16: the generated project needs pnpm 12 either way, and neither launcher was ever tested.
 - A working repo in under a minute; Enter-only and flag-only paths give the same result.
 - What gets generated is correct for an agent as well as a person: no docs describing removed parts.
 
@@ -86,7 +86,7 @@ Every choice has a default good enough that the maintainer would accept it uncha
 
 ## Installing on any machine
 
-The CLI itself runs on Node 22.13 and later (the first 22.x whose `styleText` respects `NO_COLOR`; to verify) with any package manager; the generated project needs pnpm 12, which brings its own pinned Node 26. A spike on a fresh machine (Node 24.12.0, npm 11.6.2, empty home folder) on 2026-10-27 set these rules.
+The CLI itself runs on Node 22.13 and later (the first 22.x whose `styleText` respects `NO_COLOR`; to verify), started with npm or pnpm; the generated project needs pnpm 12, which brings its own pinned Node 26. A spike on a fresh machine (Node 24.12.0, npm 11.6.2, empty home folder) on 2026-10-27 set these rules.
 
 | pnpm on the machine | What happens | What the CLI does |
 | --- | --- | --- |

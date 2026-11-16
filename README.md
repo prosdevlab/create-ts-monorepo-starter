@@ -13,7 +13,7 @@ keep, and get a project that passes its own CI on the first commit.
 
 ## Requirements
 
-- **Node.js 22.13 or later** runs the CLI, with any package manager.
+- **Node.js 22.13 or later** runs the CLI. Start it with npm or pnpm.
 - **pnpm 12** is needed to work in the generated project: building, testing and the git hooks. If pnpm isn't installed, the
   CLI fetches it for the first install. Details are under [pnpm](#pnpm).
 
@@ -22,8 +22,6 @@ keep, and get a project that passes its own CI on the first commit.
 ```bash
 npm create ts-monorepo-starter@latest my-tools
 pnpm create ts-monorepo-starter my-tools
-yarn create ts-monorepo-starter my-tools
-bun create ts-monorepo-starter my-tools
 ```
 
 For scripts, CI and coding agents, pass everything up front and skip the questions:
@@ -34,7 +32,7 @@ cd my-tools
 pnpm build && pnpm test
 ```
 
-With npm, put `--` before the options. pnpm and yarn pass them through without it.
+With npm, put `--` before the options. pnpm passes them through without it.
 
 - **What it asks:** the folder, then "Use the recommended setup?". Only if you answer No does it ask for the npm scope, the
   examples, git and the install.
@@ -90,7 +88,7 @@ Nothing publishes until you opt in; the generated README says how, and the CLI's
 ### pnpm
 
 The generated project needs pnpm 12, which brings its own pinned Node.js. The CLI itself runs on Node 22.13 or later,
-with any package manager:
+started with npm or pnpm:
 
 - pnpm 10.26 or newer switches itself to pnpm 12 for the project. The CLI tries that switch before it creates anything;
   if the switch fails, it exits with 3, creates nothing, and prints what to run. `--check` runs only this check.
