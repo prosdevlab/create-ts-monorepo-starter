@@ -10,8 +10,6 @@ commit.
 ```bash
 npm create ts-monorepo-starter@latest my-tools
 pnpm create ts-monorepo-starter my-tools
-yarn create ts-monorepo-starter my-tools
-bun create ts-monorepo-starter my-tools
 ```
 
 Runs on Node 22.13 or later. `--help` lists the options; `-y` asks nothing.

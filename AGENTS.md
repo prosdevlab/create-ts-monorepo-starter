@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository builds `create-ts-monorepo-starter`, a CLI that generates TypeScript monorepos from the [ts-monorepo-starter](https://github.com/prosdevlab/ts-monorepo-starter) template: `pnpm create ts-monorepo-starter my-tools` (also `npm create`, `yarn create`, `bun create`). The design and plans are in `docs/`. `README.md` is for people using the CLI; `CONTRIBUTING.md` covers developing it. The repository itself was created from that template and keeps its toolchain. `CLAUDE.md` imports this file, so these instructions are the single source for every agent.
+This repository builds `create-ts-monorepo-starter`, a CLI that generates TypeScript monorepos from the [ts-monorepo-starter](https://github.com/prosdevlab/ts-monorepo-starter) template: `pnpm create ts-monorepo-starter my-tools` (or `npm create ts-monorepo-starter@latest my-tools`). The design and plans are in `docs/`. `README.md` is for people using the CLI; `CONTRIBUTING.md` covers developing it. The repository itself was created from that template and keeps its toolchain. `CLAUDE.md` imports this file, so these instructions are the single source for every agent.
 
 ## Project Overview
 

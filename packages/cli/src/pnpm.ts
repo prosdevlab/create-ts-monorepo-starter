@@ -261,12 +261,6 @@ export function switchFailure(
   );
 }
 
-/** The package manager that ran us, from `npm_config_user_agent`; unknown means npm. */
-export function detectInvoker(userAgent: string | undefined): 'pnpm' | 'npm' | 'yarn' | 'bun' {
-  const name = userAgent?.split(' ')[0]?.split('/')[0];
-  return name === 'pnpm' || name === 'yarn' || name === 'bun' ? name : 'npm';
-}
-
 /** The install command for `dir`, or null when pnpm is too old to use. */
 export function installCommand(
   status: PnpmStatus,
