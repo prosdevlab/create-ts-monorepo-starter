@@ -1,5 +1,5 @@
 // Reads every changeset the way the release will, so a malformed one fails its own pull request.
-import { execFileSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,7 +27,8 @@ function main() {
   const dir = '.changeset';
   const names = readdirSync(dir).filter((f) => f.endsWith('.md') && f !== 'README.md');
   const files = new Map(names.map((f) => [f, readFileSync(join(dir, f), 'utf8')]));
-  const listed = JSON.parse(execFileSync('pnpm', ['ls', '-r', '--depth', '-1', '--json'], { encoding: 'utf8' }));
+  // A shell, because pnpm is pnpm.cmd on Windows; the command is a fixed string.
+  const listed = JSON.parse(execSync('pnpm ls -r --depth -1 --json', { encoding: 'utf8' }));
   const problems = checkChangesets(files, new Set(listed.map((p) => p.name)));
   for (const problem of problems) console.error(problem);
   if (problems.length > 0) process.exit(1);
