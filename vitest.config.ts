@@ -5,7 +5,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     restoreMocks: true,
-    include: ['packages/**/*.{test,spec}.ts'],
+    include: ['packages/**/*.{test,spec}.ts', 'scripts/**/*.test.ts'],
     // dist/ holds the bundled template with its own tests; build/ is tsc output.
     // test/e2e generates real projects (slow, online): `pnpm test:e2e` runs it.
     exclude: ['**/node_modules/**', '**/dist/**', '**/build/**', 'packages/cli/test/e2e/**'],
