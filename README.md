@@ -68,9 +68,10 @@ name with nothing valid left is rejected. At the prompt, pressing Enter uses `my
 | Code | Meaning |
 | --- | --- |
 | 0 | Done (with `--check`: ready) |
-| 1 | Something failed; the message says what, and a failure before the final move leaves nothing behind |
+| 1 | Something failed; the message says what, and where any of your files are |
 | 2 | Usage error: a flag, the folder or the scope |
 | 3 | Your pnpm needs fixing first; nothing was created, and the message says what to run |
+| 4 | The install failed; retrying may work. Nothing was created |
 | 130 | Interrupted |
 
 ## What you get

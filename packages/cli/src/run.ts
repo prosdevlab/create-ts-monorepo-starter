@@ -68,7 +68,7 @@ export interface RunDeps {
 }
 
 /** A failure with the output lines that explain it. */
-export class RunError extends CliError {
+class RunError extends CliError {
   constructor(code: ErrorCode, message: string, lines: string[] = []) {
     super(code, message, lines);
     this.name = 'RunError';
@@ -250,7 +250,7 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     const seconds = Math.round((performance.now() - started) / 1000);
     if (output.code !== 0) {
       throw new RunError(
-        'unexpected',
+        'install-failed',
         `Couldn't ${what} (pnpm exited with ${output.code})`,
         lastLines(output)
       );
@@ -301,9 +301,9 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
       await (deps.moveIntoPlace ?? moveIntoPlace)(temp, plan.target);
       phase = { at: 'moved' };
     } catch (error) {
-      if (!backup) throw error;
+      if (!backup) throw coded('move-failed', error);
       throw new RunError(
-        'unexpected',
+        'move-failed',
         `Couldn't move the project into place: ${firstLine(error)}`,
         [`The old files are in ${backup}.`]
       );

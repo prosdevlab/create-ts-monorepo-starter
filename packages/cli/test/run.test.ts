@@ -316,6 +316,21 @@ describe('run', () => {
     expect(log.at(-1)).toBe('unregister');
   });
 
+  it.each([
+    ['pnpm install', { install: true }, {}],
+    ['pnpm install --no-frozen-lockfile --lockfile-only', { install: false }, {}],
+    ['npm exec', { install: true }, { 'pnpm --version': { code: 127 } }],
+  ])('gives a failed install the code install-failed (%s)', async (prefix, overrides, base) => {
+    const exec = fakeExec({ ...base, [prefix]: { code: 1, stderr: 'boom' } });
+    const error = await run(plan(overrides), recordingUi(), deps({ exec })).catch(
+      (e: unknown) => e
+    );
+    expect(error).toMatchObject({
+      code: 'install-failed',
+      message: expect.stringMatching(/^Couldn't /),
+    });
+  });
+
   it('stops before the commit when the install added lockfile entries', async () => {
     const exec = fakeExec({
       'pnpm install': async (cwd) => {

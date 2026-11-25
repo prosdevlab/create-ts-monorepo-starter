@@ -3,9 +3,9 @@ import { basename } from 'node:path';
 import { EXAMPLES, type Options, parseArgv } from './args.js';
 import { gitIdentity } from './git.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
-import { FAILURE, INTERRUPTED, TOOLCHAIN, USAGE } from './outcome.js';
+import { CliError, codeOf, exitCode, FAILURE, TOOLCHAIN, USAGE } from './outcome.js';
 import { checkSwitch, detectPnpm, type Exec, ToolchainError, tooOld } from './pnpm.js';
-import { planFromOptions, type RunDeps, RunError, type RunPlan, run } from './run.js';
+import { planFromOptions, type RunDeps, type RunPlan, run } from './run.js';
 import { pnpmSpec } from './template.js';
 import {
   type Ask,
@@ -93,21 +93,15 @@ async function askPlan(
 function report(ui: Ui, error: unknown): number {
   if (error instanceof CancelledError) {
     ui.fail(CANCELLED, []);
-    return INTERRUPTED;
-  }
-  if (error instanceof ToolchainError) {
+  } else if (error instanceof CliError) {
     ui.fail(error.message, error.lines);
-    return TOOLCHAIN;
+  } else {
+    const [title = 'Something went wrong', ...lines] = String(
+      error instanceof Error ? error.message : error
+    ).split('\n');
+    ui.fail(title, lines);
   }
-  if (error instanceof RunError) {
-    ui.fail(error.message, error.lines);
-    return FAILURE;
-  }
-  const [title = 'Something went wrong', ...lines] = String(
-    error instanceof Error ? error.message : error
-  ).split('\n');
-  ui.fail(title, lines);
-  return FAILURE;
+  return exitCode({ ok: false, error: { code: codeOf(error) } });
 }
 
 /** What a test can swap; each defaults to the real terminal and folder. */

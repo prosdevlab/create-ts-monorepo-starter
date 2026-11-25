@@ -30,7 +30,7 @@ export const FAILURE = 1;
 /** The machine needs fixing first (pnpm can't switch versions, or is too old); nothing was created. */
 export const TOOLCHAIN = 3;
 const INSTALL_FAILED = 4;
-export const INTERRUPTED = 130;
+const INTERRUPTED = 130;
 
 /** The part of an outcome that decides the exit code. */
 export type Exiting = { ok: true } | { ok: false; error: { code: ErrorCode } };

@@ -379,7 +379,7 @@ packages:
   it('reports a failed install with the last output lines', async () => {
     const exec$ = exec({ 'pnpm install': { code: 1, stderr: 'ERR_PNPM_FETCH\nnetwork down' } });
     const { calls, code } = await go(runDeps({ exec: exec$ }));
-    expect(code).toBe(1);
+    expect(code).toBe(4);
     expect(calls).toEqual([
       'intro',
       'step: Created my-tools | @my-tools/lib, @my-tools/shared, @my-tools/cli, @my-tools/web',
@@ -397,6 +397,23 @@ packages:
     expect(calls.at(-1)).toBe(
       'fail: Lockfile changed during install: | + packages: right-pad@2.0.0'
     );
+  });
+
+  it('exits 0 for a failed git init, with a warning and a created project', async () => {
+    const exec$ = exec({ 'git init': { code: 129, stderr: 'no git' } });
+    const { calls, code } = await go(runDeps({ exec: exec$ }), ['my-tools', '-y']);
+    expect(code).toBe(0);
+    expect(calls.some((call) => call.startsWith("warn: Couldn't initialize git"))).toBe(true);
+    expect(calls.at(-1)).toBe('outro');
+  });
+
+  it('exits 1 for an error with a Node code, never 0', async () => {
+    const boom: RunDeps['generate'] = async () => {
+      throw Object.assign(new Error('no space left'), { code: 'ENOSPC' });
+    };
+    const { calls, code } = await go(runDeps({ generate: boom }));
+    expect(code).toBe(1);
+    expect(calls.at(-1)).toBe('fail: no space left');
   });
 
   it('reports a failed move into place when nothing was backed up', async () => {

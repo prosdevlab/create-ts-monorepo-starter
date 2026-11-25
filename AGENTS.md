@@ -41,7 +41,7 @@ In the order a run touches them:
 - `cli.ts`: the bin entry. Calls `main` and sets `process.exitCode`; it never calls `process.exit()`, so output flushes.
 - `main.ts`: parses the arguments, asks the questions when interactive, builds the plan, calls `run` and prints the
   result. Exit codes: 0 done, 1 failure, 2 usage error, 3 toolchain (pnpm needs fixing, nothing created),
-  130 interrupted. `--check` runs only the pnpm check.
+  4 install failed, 130 interrupted. `--check` runs only the pnpm check.
 - `args.ts`: `parseArgv` (`node:util` `parseArgs`) into `Options`; the `lib`, `cli`, `web` example list.
 - `names.ts`: folder to package name, and scope normalization.
 - `ui.ts`: the prompts (`createAsk`, @clack/prompts), two outputs (clack for terminals; plain for pipes, CI and
