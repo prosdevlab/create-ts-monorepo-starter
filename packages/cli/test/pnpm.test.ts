@@ -209,10 +209,6 @@ describe('installCommand', () => {
   it('rejects a relative directory', () => {
     expect(() => installCommand({ kind: 'none' }, 'my-tools', false)).toThrow('absolute');
   });
-
-  it('old has no command', () => {
-    expect(installCommand({ kind: 'old', version: '9.0.0' }, dir, false)).toBeNull();
-  });
 });
 
 describe('quoteWindowsArg', () => {

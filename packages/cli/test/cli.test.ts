@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,12 +45,12 @@ function cli(args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
 }
 
 /**
- * Puts a stand-in `pnpm` first on PATH: it answers `--version` with 12.15.0, logs every other
+ * Puts a stand-in `pnpm` first on PATH: it answers `--version` with `version`, logs every other
  * call's arguments to the returned file, and exits 0. A real `pnpm install --lockfile-only`
  * fetches metadata from the npm registry, so a slow registry would time this test out; the e2e
  * tests cover real pnpm.
  */
-function fakePnpm(): string {
+function fakePnpm(version = '12.15.0'): string {
   const dir = join(root, 'fake-bin');
   mkdirSync(dir);
   const calls = join(root, 'pnpm-calls.txt');
@@ -50,7 +58,7 @@ function fakePnpm(): string {
     join(dir, 'pnpm.mjs'),
     `import { appendFileSync } from 'node:fs';
 const args = process.argv.slice(2);
-if (args[0] === '--version') console.log('12.15.0');
+if (args[0] === '--version') console.log(${JSON.stringify(version)});
 else appendFileSync(${JSON.stringify(calls)}, args.join(' ') + '\\n');
 `
   );
@@ -127,4 +135,16 @@ describe('cli', () => {
     expect(readdirSync(root).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
     expect(readFileSync(calls, 'utf8')).toBe('install --no-frozen-lockfile --lockfile-only\n');
   }, 60_000);
+
+  it('exits 3 and creates nothing when pnpm is too old to switch', () => {
+    const calls = fakePnpm('9.15.9');
+    const before = readdirSync(root).sort();
+    const result = cli(['proj', '-y'], { NO_COLOR: '1' });
+    expect(result.status).toBe(3);
+    expect(result.stderr).toContain('✗ pnpm 9.15.9 is too old for this project');
+    expect(result.stderr).toContain('Upgrade pnpm: npm install -g pnpm');
+    expect(result.stderr).toContain('Nothing was created.');
+    expect(readdirSync(root).sort()).toEqual(before);
+    expect(existsSync(calls)).toBe(false);
+  });
 });

@@ -1,7 +1,7 @@
 // CI's fresh-machine job: runs the built CLI with -y where pnpm is missing, too old, or 10.x.
 // Usage: node fresh-machine.mjs <path to dist/cli.js> <none | 9.15.9 | 10.34.8>
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -51,20 +51,25 @@ if (pnpmCase === 'none') check(before.code !== 0, 'no pnpm on PATH');
 else check(before.stdout.trim() === pnpmCase, `pnpm --version is ${pnpmCase}`);
 
 const created = run(process.execPath, [cli, 'my-tools', '-y'], work);
-check(created.code === 0, 'the CLI exits 0');
-check(existsSync(join(project, 'package.json')), 'the project exists');
-const log = run('git', ['log', '--format=%s'], project);
-check(log.stdout.trim().split('\n').length === 1, 'git has exactly one commit');
+if (pnpmCase === '9.15.9') {
+  // Too old to switch to pnpm 12: the CLI stops before creating anything.
+  const message = 'pnpm 9.15.9 is too old for this project';
+  check(created.code === 3, 'the CLI exits 3');
+  check(created.stderr.includes(message), `prints "${message}"`);
+  check(created.stderr.includes('npm install -g pnpm'), 'prints npm install -g pnpm');
+  check(readdirSync(work).length === 0, 'nothing was created');
+} else {
+  check(created.code === 0, 'the CLI exits 0');
+  check(existsSync(join(project, 'package.json')), 'the project exists');
+  const log = run('git', ['log', '--format=%s'], project);
+  check(log.stdout.trim().split('\n').length === 1, 'git has exactly one commit');
+}
 
 if (pnpmCase === 'none') {
   check(created.stderr.includes('(npm exec)'), 'installs through npm exec');
   check(created.stdout.includes('npm install -g pnpm'), 'prints npm install -g pnpm');
   check(existsSync(join(project, 'node_modules')), 'node_modules exists');
-} else if (pnpmCase === '9.15.9') {
-  const message = 'pnpm 9.15.9 is too old for this project';
-  check(created.stderr.includes(message), `prints "${message}"`);
-  check(!existsSync(join(project, 'node_modules')), 'no node_modules');
-} else {
+} else if (pnpmCase === '10.34.8') {
   check(
     created.stdout.includes('Installed dependencies with pnpm 12.15.0'),
     'installs with pnpm 12.15.0'

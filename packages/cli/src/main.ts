@@ -3,7 +3,7 @@ import { basename } from 'node:path';
 import { EXAMPLES, type Options, parseArgv } from './args.js';
 import { gitIdentity } from './git.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
-import { checkSwitch, detectPnpm, type Exec, ToolchainError } from './pnpm.js';
+import { checkSwitch, detectPnpm, type Exec, ToolchainError, tooOld } from './pnpm.js';
 import { planFromOptions, RunError, type RunPlan, run } from './run.js';
 import { pnpmSpec } from './template.js';
 import {
@@ -138,10 +138,8 @@ async function check(ui: Ui, exec: Exec | undefined): Promise<number> {
     return 0;
   }
   if (pnpm.kind === 'old') {
-    ui.fail(`pnpm ${pnpm.version} is too old for this project`, [
-      `This project needs pnpm 10.26 or newer, which switches itself to pnpm ${version}.`,
-      'Upgrade pnpm (https://pnpm.io/installation), then run --check again.',
-    ]);
+    const error = tooOld(pnpm.version, spec);
+    ui.fail(error.message, error.lines);
     return TOOLCHAIN;
   }
   try {
