@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Exec } from '../src/pnpm';
+import type { Exec, ToolchainError } from '../src/pnpm';
 import { planFromOptions, type RunDeps, type RunPlan, run } from '../src/run';
 import type { Ui } from '../src/ui';
 
@@ -201,18 +201,22 @@ describe('run', () => {
     ]);
   });
 
-  it('skips the install when pnpm is too old, and still commits', async () => {
-    const ui = recordingUi();
+  it('stops before generating when pnpm is too old to switch', async () => {
+    // Going on would commit the template's lockfile, which still names @monorepo/ packages.
     const exec = fakeExec({ 'pnpm --version': { code: 0, stdout: '9.15.9\n' } });
-    const result = await run(plan(), ui, deps({ exec }));
-    expect(result).toMatchObject({ installed: false, git: 'committed' });
-    expect(result.pnpm).toEqual({ kind: 'old', version: '9.15.9' });
-    expect(log.some((line) => line.startsWith('pnpm install'))).toBe(false);
-    expect(log.some((line) => line.startsWith('git commit'))).toBe(true);
-    expect(ui.calls).toContainEqual(
-      expect.stringMatching(/^fail: pnpm 9\.15\.9 is too old for this project \| /)
+    const error = await run(plan(), recordingUi(), deps({ exec })).catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      name: 'ToolchainError',
+      message: 'pnpm 9.15.9 is too old for this project',
+    });
+    expect((error as ToolchainError).lines.at(-1)).toBe(
+      'Then run this command again. Nothing was created.'
     );
-    expect(leftovers()).toEqual(['my-tools']);
+    expect(log).not.toContain('generate');
+    expect(log.filter((line) => line === 'pnpm --version')).toHaveLength(1);
+    expect(log.some((line) => line.startsWith('git '))).toBe(false);
+    expect(log.at(-1)).toBe('unregister');
+    expect(leftovers()).toEqual([]);
   });
 
   it('installs through npm exec when pnpm is missing, after a warning', async () => {
@@ -377,7 +381,7 @@ describe('run', () => {
     expect(leftovers()).toEqual([]);
   });
 
-  it('skips the switch check when pnpm is missing or too old', async () => {
+  it('skips the switch check when pnpm is missing', async () => {
     await run(plan(), recordingUi(), deps({ exec: fakeExec({ 'pnpm --version': { code: 127 } }) }));
     expect(log.filter((line) => line === 'pnpm --version')).toHaveLength(1);
   });

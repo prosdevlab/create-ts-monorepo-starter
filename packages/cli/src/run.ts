@@ -11,7 +11,8 @@ import {
   detectPnpm,
   type Exec,
   installCommand,
-  type PnpmStatus,
+  tooOld,
+  type UsablePnpm,
 } from './pnpm.js';
 import { cliVersion, pnpmSpec, templateDir, templateLabel } from './template.js';
 import { CANCELLED, type Ui } from './ui.js';
@@ -43,7 +44,7 @@ export interface RunPlan {
 type GitOutcome = 'committed' | 'no-identity' | 'no-git' | 'inside-repo' | 'off' | 'failed';
 
 export interface RunResult {
-  pnpm: PnpmStatus;
+  pnpm: UsablePnpm;
   installed: boolean;
   git: GitOutcome;
   packages: string[];
@@ -192,6 +193,7 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     const spec = pnpmSpec(await readFile(join(from, 'package.json'), 'utf8'));
     const pin = spec.slice('pnpm@'.length);
     const pnpm = await detectPnpm(exec);
+    if (pnpm.kind === 'old') throw tooOld(pnpm.version, spec);
     if (pnpm.kind === 'ok') await checkSwitch(spec, pnpm.version, exec);
 
     await (deps.generate ?? generate)({
@@ -229,40 +231,28 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     }
 
     const command = installCommand(pnpm, temp, !plan.install);
-    let installed = false;
-    let seconds = 0;
-    // installCommand is null only for a pnpm too old to use.
-    if (!command) {
-      ui.fail(`pnpm ${'version' in pnpm ? pnpm.version : ''} is too old for this project`, [
-        'It would install with the wrong pnpm and Node, and skip the',
-        '3-day release rule. Install skipped.',
+    const what = plan.install ? 'install dependencies' : 'update the lockfile';
+    if (pnpm.kind === 'none') {
+      const doing = plan.install ? 'Installing' : 'Updating the lockfile';
+      ui.warn("pnpm isn't installed", [
+        `${doing} with a temporary pnpm ${pin} instead (npm exec).`,
       ]);
-    } else {
-      const what = plan.install ? 'install dependencies' : 'update the lockfile';
-      if (pnpm.kind === 'none') {
-        const doing = plan.install ? 'Installing' : 'Updating the lockfile';
-        ui.warn("pnpm isn't installed", [
-          `${doing} with a temporary pnpm ${pin} instead (npm exec).`,
-        ]);
-      }
-      const using = pnpm.kind === 'ok' ? ` with pnpm ${pin}` : '';
-      const started = performance.now();
-      ui.start(plan.install ? `Installing dependencies${using}` : 'Updating the lockfile');
-      let output: Awaited<ReturnType<Exec>>;
-      try {
-        output = await exec(command.cmd, command.args, { cwd: command.cwd });
-      } finally {
-        ui.stop();
-      }
-      seconds = Math.round((performance.now() - started) / 1000);
-      if (output.code !== 0) {
-        throw new RunError(`Couldn't ${what} (pnpm exited with ${output.code})`, lastLines(output));
-      }
-      installed = plan.install;
-      ui.step(
-        plan.install ? `Installed dependencies${using} (${seconds}s)` : 'Updated the lockfile'
-      );
     }
+    const using = pnpm.kind === 'ok' ? ` with pnpm ${pin}` : '';
+    const started = performance.now();
+    ui.start(plan.install ? `Installing dependencies${using}` : 'Updating the lockfile');
+    let output: Awaited<ReturnType<Exec>>;
+    try {
+      output = await exec(command.cmd, command.args, { cwd: command.cwd });
+    } finally {
+      ui.stop();
+    }
+    const seconds = Math.round((performance.now() - started) / 1000);
+    if (output.code !== 0) {
+      throw new RunError(`Couldn't ${what} (pnpm exited with ${output.code})`, lastLines(output));
+    }
+    const installed = plan.install;
+    ui.step(plan.install ? `Installed dependencies${using} (${seconds}s)` : 'Updated the lockfile');
 
     assertLockfileSubset(
       await readFile(join(from, 'pnpm-lock.yaml'), 'utf8'),

@@ -163,20 +163,6 @@ describe('plainUi', () => {
     );
   });
 
-  it('tells an old pnpm to upgrade, then install', () => {
-    const { ui, out } = capture();
-    ui.outro({ ...result, pnpm: { kind: 'old', version: '9.15.9' }, installed: false }, plan);
-    expect(out()).toContain(
-      [
-        'Upgrade pnpm, then install:',
-        '  npm install -g pnpm',
-        '  Any pnpm from 10.26 on switches itself to 12.15.0 for this project.',
-        '',
-        'Next: cd acme-tools && pnpm install && pnpm build && pnpm test',
-      ].join('\n')
-    );
-  });
-
   it('says the first pnpm install still has to run with install off', () => {
     const { ui, out } = capture();
     ui.outro({ ...result, installed: false }, { ...plan, install: false });

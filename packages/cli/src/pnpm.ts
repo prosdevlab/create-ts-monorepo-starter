@@ -9,6 +9,9 @@ export type PnpmStatus =
   | { kind: 'old'; version: string }
   | { kind: 'none' };
 
+/** A pnpm the run can go on with: `old` stops before anything is created. */
+export type UsablePnpm = Exclude<PnpmStatus, { kind: 'old' }>;
+
 export type Exec = (
   cmd: string,
   args: string[],
@@ -193,6 +196,16 @@ export class ToolchainError extends Error {
 
 export const PNPM_HELP = 'https://github.com/prosdevlab/create-ts-monorepo-starter#pnpm';
 
+/** The stop for a pnpm older than 10.26, which can't switch itself to the template's pnpm. */
+export function tooOld(found: string, spec: string): ToolchainError {
+  const version = spec.slice('pnpm@'.length);
+  return new ToolchainError(`pnpm ${found} is too old for this project`, [
+    `This project needs pnpm 10.26 or newer, which switches itself to pnpm ${version}.`,
+    'Upgrade pnpm: npm install -g pnpm (or https://pnpm.io/installation)',
+    'Then run this command again. Nothing was created.',
+  ]);
+}
+
 /** Whether a file exists; injected so `checkSwitch` stays testable without a real pnpm. */
 export type Exists = (path: string) => Promise<boolean>;
 
@@ -263,15 +276,14 @@ export function switchFailure(
 
 /** The install command for `dir`, or null when pnpm is too old to use. */
 export function installCommand(
-  status: PnpmStatus,
+  status: UsablePnpm,
   dir: string,
   lockfileOnly: boolean
-): { cmd: string; args: string[]; cwd: string } | null {
+): { cmd: string; args: string[]; cwd: string } {
   if (!isAbsolute(dir)) throw new Error(`installCommand needs an absolute directory, got: ${dir}`);
   // The bundled lockfile always needs updating, and pnpm freezes it by default when CI is set.
   const extra = ['--no-frozen-lockfile', ...(lockfileOnly ? ['--lockfile-only'] : [])];
   if (status.kind === 'ok') return { cmd: 'pnpm', args: ['install', ...extra], cwd: dir };
-  if (status.kind === 'old') return null;
   return {
     cmd: 'npm',
     args: [

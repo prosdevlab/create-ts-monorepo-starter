@@ -96,8 +96,8 @@ started with npm or pnpm:
   v12... Looks like pnpm CLI is missing at ".../bin" or is incorrect`. Running that script fixes it:
   `node <the folder before /bin>/node_modules/pnpm/install.js`. The CLI prints the exact command.
 - No pnpm: the CLI installs with `npm exec` and says that commits need pnpm, with the command to install it.
-- pnpm older than 10.26: the CLI stops before installing and prints the upgrade command, because such a pnpm can't
-  switch itself to pnpm 12 (pnpm 9 would also ignore the pinned pnpm and rewrite the lockfile).
+- pnpm older than 10.26: the CLI exits with 3, creates nothing, and prints the upgrade command, because such a pnpm
+  can't switch itself to pnpm 12 (pnpm 9 would also ignore the pinned pnpm and rewrite the lockfile).
 
 ## Template version
 

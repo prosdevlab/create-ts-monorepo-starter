@@ -87,21 +87,16 @@ function closing(result: RunResult, plan: RunPlan) {
   let title = 'Ready.';
   let commands: string[] = [];
   let notes: string[] = [];
-  if (result.pnpm.kind === 'old') {
-    title = 'Upgrade pnpm, then install:';
-    commands = ['npm install -g pnpm'];
-    notes = [`Any pnpm from 10.26 on switches itself to ${pin} for this project.`];
-  } else if (result.pnpm.kind === 'none') {
+  if (result.pnpm.kind === 'none') {
     title = 'One step left before your first commit:';
     commands = ['npm install -g pnpm'];
     notes = [
       `The git hooks run pnpm. Any pnpm from 10.26 on switches itself to ${pin.split('.')[0]}.`,
     ];
   }
-  const extra =
-    !result.installed && result.pnpm.kind !== 'old'
-      ? ["Dependencies aren't installed: the first pnpm install installs them and the git hooks."]
-      : [];
+  const extra = !result.installed
+    ? ["Dependencies aren't installed: the first pnpm install installs them and the git hooks."]
+    : [];
   const dir = cdPath(plan.target, result.backup !== undefined);
   const next = [
     ...(dir ? [`cd ${dir}`] : []),
