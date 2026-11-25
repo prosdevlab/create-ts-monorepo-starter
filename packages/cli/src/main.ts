@@ -6,7 +6,7 @@ import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from '
 import { exitCode, FAILURE, type Left, type Outcome, TOOLCHAIN } from './outcome.js';
 import { checkSwitch, detectPnpm, type Exec, ToolchainError, tooOld } from './pnpm.js';
 import { failureFrom, renderText, usageFailure } from './report.js';
-import { leftOf, planFromOptions, type RunDeps, type RunPlan, run } from './run.js';
+import { leftOf, leftoverLine, planFromOptions, type RunDeps, type RunPlan, run } from './run.js';
 import { pnpmSpec } from './template.js';
 import {
   type Ask,
@@ -172,7 +172,10 @@ export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome>
     return { ok: true, kind: 'created', plan, result, warnings: [], left };
   } catch (error) {
     const left = leftOf(error);
-    return { ok: false, error: failureFrom(error), ...(left && { left }) };
+    const failure = failureFrom(error);
+    // The interrupt path says this too; a failure would otherwise leave the folder unmentioned.
+    if (left?.temp) failure.lines = [...failure.lines, leftoverLine(left.temp)];
+    return { ok: false, error: failure, ...(left && { left }) };
   }
 }
 

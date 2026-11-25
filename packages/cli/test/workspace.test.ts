@@ -472,6 +472,12 @@ describe('probePath', () => {
   });
 
   it('is unreadable for any error but a missing path, and never throws', () => {
+    // A null byte fails the same way on every OS, with no errno at all.
+    expect(probePath(join(root, 'a\0b'))).toBe('unreadable');
+  });
+
+  // Windows reports a path through a file as ENOENT, which is missing there; POSIX says ENOTDIR.
+  it.skipIf(process.platform === 'win32')('is unreadable through a file', () => {
     put(root, 'file', 'x');
     expect(probePath(join(root, 'file', 'below'))).toBe('unreadable');
   });

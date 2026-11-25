@@ -601,8 +601,8 @@ packages:
     const failed = exec({ 'pnpm install': { code: 1, stderr: 'network down' } });
     const { calls, code } = await go(runDeps({ exec: failed, rm }));
     expect(code).toBe(4);
-    expect(calls.at(-1)).toBe(
-      "fail: Couldn't install dependencies (pnpm exited with 1) | network down"
+    expect(folder(calls.at(-1) ?? '')).toMatch(
+      /^fail: Couldn't install dependencies \(pnpm exited with 1\) \| network down \| Couldn't delete the temporary folder <cwd>\/\.my-tools\.tmp-[0-9a-f]{8}: delete it yourself\.$/
     );
     const { ui } = recordingUi();
     const outcome = await execute(['my-tools', '-y', '--no-git'], {

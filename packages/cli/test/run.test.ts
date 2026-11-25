@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm as rmPromise, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -804,6 +804,26 @@ describe('what the run left behind', () => {
       });
     });
 
+    it('reports the temporary folder by what is on disk, not by whether rm threw', async () => {
+      const exec = fakeExec({ 'pnpm install': { code: 1, stderr: 'network down' } });
+      // An rm that resolves but leaves the folder: still reported.
+      const keeps: RunDeps['rm'] = async () => undefined;
+      const kept = await run(plan(), recordingUi(), deps({ exec, rm: keeps })).catch(
+        (e: unknown) => e
+      );
+      expect(leftOf(kept)).toHaveProperty('temp');
+      // An rm that deletes, then throws: nothing is left, so nothing is reported.
+      const deletes: RunDeps['rm'] = async (path, options) => {
+        await rmPromise(path, options);
+        throw new Error('EBUSY after the fact');
+      };
+      const gone = await run(plan(), recordingUi(), deps({ exec, rm: deletes })).catch(
+        (e: unknown) => e
+      );
+      expect(gone).toMatchObject({ code: 'install-failed' });
+      expect(leftOf(gone)).not.toHaveProperty('temp');
+    });
+
     it('rethrows a thrown string untouched and records nothing for it', async () => {
       const generate: RunDeps['generate'] = async () => {
         throw 'just a string';
@@ -880,6 +900,10 @@ describe('what the run left behind', () => {
         target: 'unknown',
         backup: B,
       });
+      // Files still in the target, and a backup that can't be read: never "unchanged".
+      expect(row(phase, 'not-empty', { [T]: 'not-empty', [B]: 'unreadable' })).toEqual({
+        target: 'unknown',
+      });
     });
 
     it('moving: an empty or missing target keeps the backup only if it holds files', () => {
@@ -890,6 +914,11 @@ describe('what the run left behind', () => {
       });
       expect(row(phase, 'not-empty', { [T]: 'empty', [B]: 'empty' })).toEqual({ target: 'empty' });
       expect(row({ at: 'moving' }, 'missing', { [T]: 'missing' })).toEqual({ target: 'missing' });
+      // backUp has returned: a backup that can't be read is still where the files are.
+      expect(row(phase, 'not-empty', { [T]: 'missing', [B]: 'unreadable' })).toEqual({
+        target: 'missing',
+        backup: B,
+      });
     });
 
     it('moving into a target that has files is partial, unless nothing was allowed to move', () => {
@@ -901,6 +930,8 @@ describe('what the run left behind', () => {
       expect(row({ at: 'moving' }, 'not-empty', { [T]: 'not-empty' })).toEqual({
         target: 'unchanged',
       });
+      // The target's state at the start couldn't be read: don't guess.
+      expect(row({ at: 'moving' }, undefined, { [T]: 'not-empty' })).toEqual({ target: 'unknown' });
     });
 
     it('moved is complete, without reading, with the backup if there is one', () => {

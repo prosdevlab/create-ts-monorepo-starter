@@ -16,7 +16,7 @@
 
 - **Text output is unchanged,** byte for byte, on stdout and stderr, for every exit path Task 0 pins. Task 0 lands first, on today's code; Tasks 1–3 must pass it without edits to its expected strings or call sequences.
 - **Intended changes, each a bug fix with its own test:**
-  1. A failed run whose temporary folder can't be deleted shows the run's own error and exit code, not the deletion's (Task 3, Step 3). For a failed install that is exit 4 where today it is 1.
+  1. A failed run whose temporary folder can't be deleted shows the run's own error and exit code, not the deletion's, followed by the line the interrupt path already prints: "Couldn't delete the temporary folder <path>: delete it yourself." (Task 3, Step 3). For a failed install that is exit 4 where today it is 1.
   2. A Ctrl-C while backing up names the real backup folder when one with the same name already existed (Task 3, Step 2).
   3. A Ctrl-C during an in-place backup removes the backup folder this run created, if it is still empty (`rmdirSync`, which can't remove a folder with files; never before `onPath` has fired, so never an earlier backup) (Task 3, Step 4).
 - **Tests edited on purpose:** `run.test.ts`'s `planFromOptions` exact match gains `folder` (Task 3, Step 2). No other existing expected value changes.
@@ -242,6 +242,7 @@ Lands first, on today's code, with no behavior change.
 | The cleanup's error hides the run's error (Windows file locks) | `run()`'s `catch` | Task 3 Step 3 |
 | Exit 4 is released and can't be pulled back | the release | npm publishing is on (`NPM_PUBLISH` is `true`): merging the version PR publishes. Undoing it means another release that changes exit codes again, so decide before merging that PR |
 | Windows signal paths | interrupts | the e2e interrupt tests skip win32; Windows relies on the unit tests |
+| A target that is a symlink or junction | `leftBehind` | `targetState` follows links, `probe` doesn't (`lstat`), so a failed move into a linked empty folder reports `partial` rather than `empty`: the cautious direction. Accepted |
 
 **Rollback:** revert the PR. Before the version PR merges, nothing is released. After, revert and release a patch, knowing scripts see exit codes change twice.
 

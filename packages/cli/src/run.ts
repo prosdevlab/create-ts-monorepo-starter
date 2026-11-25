@@ -129,6 +129,10 @@ type Phase =
   | { at: 'backed-up'; backup: string }
   | { at: 'moving'; backup?: string };
 
+/** What a failure or a Ctrl-C says about a temporary folder it couldn't delete. */
+export const leftoverLine = (temp: string) =>
+  `Couldn't delete the temporary folder ${temp}: delete it yourself.`;
+
 /** The line a Ctrl-C prints: "nothing was written" holds only until the backup starts. */
 function cancelMessage(
   phase: Phase,
@@ -138,9 +142,7 @@ function cancelMessage(
 ): [string, string[]] {
   const { target } = plan;
   const leftover = [
-    ...(outcome.removed
-      ? []
-      : [`Couldn't delete the temporary folder ${temp}: delete it yourself.`]),
+    ...(outcome.removed ? [] : [leftoverLine(temp)]),
     ...(outcome.stopped ? [] : ['pnpm may still be running in it.']),
   ];
   switch (phase.at) {
@@ -193,9 +195,11 @@ export function leftBehind(
   const now = read(target);
   if (now === 'unreadable') return unknown(backup);
   if (phase.at === 'moving') {
-    const saved = backup && read(backup) === 'not-empty' ? backup : undefined;
-    const where = saved && { backup: saved };
+    // backUp has returned, so the files are there unless the disk says the folder is gone or empty.
+    const kept = backup ? read(backup) : 'missing';
+    const where = backup && kept !== 'missing' && kept !== 'empty' ? { backup } : {};
     if (now === 'missing' || now === 'empty') return { target: now, ...where };
+    if (before === undefined) return { target: 'unknown', ...where };
     if (before === 'missing' || before === 'empty' || backup)
       return { target: 'partial', ...where };
     return { target: 'unchanged' };
