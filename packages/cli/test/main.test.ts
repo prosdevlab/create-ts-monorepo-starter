@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CANCEL_SYMBOL } from '@clack/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { main, TOOLCHAIN } from '../src/main';
+import { execute, main, TOOLCHAIN } from '../src/main';
+import { exitCode } from '../src/outcome';
 import type { Exec } from '../src/pnpm';
 import type { RunDeps } from '../src/run';
 import { pnpmSpec } from '../src/template';
@@ -515,5 +516,101 @@ packages:
     await go(runDeps({ generate: boom, rm }));
     expect(removed).toHaveLength(1);
     expect(removed[0]).toMatch(/\.my-tools\.tmp-[0-9a-f]{8}$/);
+  });
+
+  describe('execute: the code of every exit', () => {
+    const outcomeOf = async (deps: RunDeps, argv = ['my-tools', '-y', '--no-git']) => {
+      const { ui } = recordingUi();
+      return execute(argv, { cwd, ui, runDeps: deps });
+    };
+    const codeOf = async (deps: RunDeps, argv?: string[]) => {
+      const outcome = await outcomeOf(deps, argv);
+      return outcome.ok ? 'ok' : outcome.error.code;
+    };
+
+    it('target-not-empty, with no left', async () => {
+      nonEmptyTarget();
+      const outcome = await outcomeOf(runDeps());
+      expect(outcome).toMatchObject({ ok: false, error: { code: 'target-not-empty' } });
+      expect(outcome).not.toHaveProperty('left');
+      expect(exitCode(outcome)).toBe(1);
+    });
+
+    it('backup-failed, on a first entry and on a whole-folder rename', async () => {
+      nonEmptyTarget();
+      const inPlace: RunDeps['backUp'] = (t, now, d) =>
+        backUp(t, now, { ...d, rename: failingOn(1) });
+      expect(await codeOf(runDeps({ cwd: target, backUp: inPlace }), force)).toBe('backup-failed');
+      expect(await codeOf(runDeps({ backUp: inPlace }), force)).toBe('backup-failed');
+    });
+
+    it('move-failed, with and without a backup', async () => {
+      const move: RunDeps['moveIntoPlace'] = (temp, to) =>
+        moveIntoPlace(temp, to, { rename: failingOn(1) });
+      expect(await codeOf(runDeps({ moveIntoPlace: move }))).toBe('move-failed');
+      nonEmptyTarget();
+      expect(await codeOf(runDeps({ moveIntoPlace: move }), force)).toBe('move-failed');
+    });
+
+    it('lockfile-changed and install-failed', async () => {
+      const changed = `${LOCKFILE}\n  right-pad@2.0.0:\n    resolution: {integrity: sha512-y}\n`;
+      expect(await codeOf(runDeps({ generate: generate(changed) }))).toBe('lockfile-changed');
+      const failed = exec({ 'pnpm install': { code: 1 } });
+      expect(await codeOf(runDeps({ exec: failed }))).toBe('install-failed');
+    });
+
+    it('unexpected, from a plain Error and from an ENOSPC error', async () => {
+      const plain: RunDeps['generate'] = async () => {
+        throw new Error('boom');
+      };
+      const enospc: RunDeps['generate'] = async () => {
+        throw Object.assign(new Error('full'), { code: 'ENOSPC' });
+      };
+      expect(await codeOf(runDeps({ generate: plain }))).toBe('unexpected');
+      const outcome = await outcomeOf(runDeps({ generate: enospc }));
+      expect(outcome).toMatchObject({ ok: false, error: { code: 'unexpected' } });
+      expect(exitCode(outcome)).toBe(1);
+    });
+
+    it('cancelled, with no left', async () => {
+      const { ui } = recordingUi();
+      const prompts = { text: async () => cancelled } as unknown as Prompts;
+      const outcome = await execute([], { cwd, interactive: true, ui, prompts });
+      expect(outcome).toMatchObject({ ok: false, error: { code: 'cancelled' } });
+      expect(outcome).not.toHaveProperty('left');
+    });
+
+    it('usage, from a NameError, with no left', async () => {
+      const outcome = await outcomeOf(runDeps(), ['my-tools', '-y', '--scope', '@a b']);
+      expect(outcome).toMatchObject({ ok: false, error: { code: 'usage' } });
+      expect(outcome).not.toHaveProperty('left');
+    });
+
+    it('a created project is complete, with the backup when there was one', async () => {
+      nonEmptyTarget();
+      const outcome = await outcomeOf(runDeps(), force);
+      expect(outcome).toMatchObject({ ok: true, kind: 'created', left: { target: 'complete' } });
+      expect(outcome.ok && outcome.kind === 'created' && outcome.left.backup).toMatch(/\.backup-/);
+    });
+  });
+
+  it('shows the install error, exit 4 and left.temp when the cleanup fails too', async () => {
+    const rm: RunDeps['rm'] = async () => {
+      throw new Error('EBUSY: resource busy');
+    };
+    const failed = exec({ 'pnpm install': { code: 1, stderr: 'network down' } });
+    const { calls, code } = await go(runDeps({ exec: failed, rm }));
+    expect(code).toBe(4);
+    expect(calls.at(-1)).toBe(
+      "fail: Couldn't install dependencies (pnpm exited with 1) | network down"
+    );
+    const { ui } = recordingUi();
+    const outcome = await execute(['my-tools', '-y', '--no-git'], {
+      cwd,
+      ui,
+      runDeps: runDeps({ exec: failed, rm }),
+    });
+    expect(outcome).toMatchObject({ ok: false, error: { code: 'install-failed' } });
+    expect(!outcome.ok && outcome.left?.temp).toMatch(/\.my-tools\.tmp-[0-9a-f]{8}$/);
   });
 });

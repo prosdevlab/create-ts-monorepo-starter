@@ -17,6 +17,7 @@ import {
   holdsCwd,
   moveIntoPlace,
   onInterrupt,
+  probePath,
   targetState,
   tempPath,
 } from '../src/workspace';
@@ -229,6 +230,26 @@ describe('backUp', () => {
     return target;
   };
 
+  it('reports the -1 path when the base name is taken', async () => {
+    const target = project();
+    mkdirSync(backupPath(target, now));
+    const reported: string[] = [];
+    const backup = await backUp(target, now, { cwd: root, onPath: (path) => reported.push(path) });
+    expect(reported).toEqual([`${backupPath(target, now)}-1`]);
+    expect(backup).toBe(reported[0]);
+  });
+
+  it('reports the path after the backup folder exists, in place, and before anything moves', async () => {
+    const target = project();
+    const seen: { exists: boolean; inTarget: string[] }[] = [];
+    await backUp(target, now, {
+      cwd: target,
+      onPath: (path) =>
+        seen.push({ exists: existsSync(path), inTarget: readdirSync(target).sort() }),
+    });
+    expect(seen).toEqual([{ exists: true, inTarget: ['.git', 'notes.txt', 'src'] }]);
+  });
+
   it('moves the entries, not the folder, when the target is the current folder', async () => {
     const target = project();
     const backup = await backUp(target, now, { cwd: target });
@@ -436,5 +457,22 @@ describe('onInterrupt', () => {
     expect(signals.map((s) => process.listenerCount(s))).toEqual(before.map((n) => n + 1));
     off();
     expect(signals.map((s) => process.listenerCount(s))).toEqual(before);
+  });
+});
+
+describe('probePath', () => {
+  it('reads a missing, empty and non-empty folder, and a file', () => {
+    const dir = join(root, 'd');
+    expect(probePath(dir)).toBe('missing');
+    mkdirSync(dir);
+    expect(probePath(dir)).toBe('empty');
+    put(dir, 'f', 'x');
+    expect(probePath(dir)).toBe('not-empty');
+    expect(probePath(join(dir, 'f'))).toBe('not-empty');
+  });
+
+  it('is unreadable for any error but a missing path, and never throws', () => {
+    put(root, 'file', 'x');
+    expect(probePath(join(root, 'file', 'below'))).toBe('unreadable');
   });
 });

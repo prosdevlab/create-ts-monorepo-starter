@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, rmSync } from 'node:fs';
 import { rename as fsRename, lstat, mkdir, readdir, realpath, rmdir, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { hasLiveChildren, stopChildren } from './pnpm.js';
@@ -45,6 +45,19 @@ export async function targetState(target: string): Promise<'missing' | 'empty' |
   if (!info) return 'missing';
   if (!info.isDirectory()) return 'not-empty';
   return (await readdir(target)).length === 0 ? 'empty' : 'not-empty';
+}
+
+/** What a synchronous read of one path found; `unreadable` is any error but "not there". */
+export type Probe = 'missing' | 'empty' | 'not-empty' | 'unreadable';
+
+/** Never throws. Anything that exists and isn't a directory (a file as the target) is `not-empty`. */
+export function probePath(path: string): Probe {
+  try {
+    if (!lstatSync(path).isDirectory()) return 'not-empty';
+    return readdirSync(path).length === 0 ? 'empty' : 'not-empty';
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable';
+  }
 }
 
 export type MoveDeps = {
@@ -103,7 +116,7 @@ const firstLine = (error: unknown) =>
 export async function backUp(
   target: string,
   now: Date,
-  deps: MoveDeps & { cwd?: string } = {}
+  deps: MoveDeps & { cwd?: string; onPath?: (backup: string) => void } = {}
 ): Promise<string> {
   target = resolve(target);
   const base = backupPath(target, now);
@@ -111,10 +124,12 @@ export async function backUp(
   for (let n = 1; await exists(candidate); n += 1) candidate = `${base}-${n}`;
   const move = retryingRename(deps);
   if (!(await holdsCwd(target, deps.cwd))) {
+    deps.onPath?.(candidate);
     await move(target, candidate);
     return candidate;
   }
   await mkdir(candidate);
+  deps.onPath?.(candidate);
   const entries = await readdir(target);
   for (const [index, entry] of entries.entries()) {
     try {

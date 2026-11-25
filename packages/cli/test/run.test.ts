@@ -1,12 +1,13 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Outcome } from '../src/outcome';
 import type { Exec, ToolchainError } from '../src/pnpm';
-import { planFromOptions, type RunDeps, type RunPlan, run } from '../src/run';
+import { leftBehind, leftOf, planFromOptions, type RunDeps, type RunPlan, run } from '../src/run';
 import type { Ui } from '../src/ui';
-import { backUp, moveIntoPlace } from '../src/workspace';
+import { backUp, moveIntoPlace, type Probe } from '../src/workspace';
 
 const LOCKFILE = `lockfileVersion: '9.0'
 
@@ -105,6 +106,7 @@ describe('planFromOptions', () => {
     const result = planFromOptions({ ...options, folder: 'My Tools' }, '/work', now, undefined);
     expect(result).toEqual({
       target: resolve('/work', 'My Tools'),
+      folder: 'My Tools',
       folderName: 'my-tools',
       scope: '@my-tools',
       keep: ['lib', 'cli', 'web'],
@@ -670,6 +672,448 @@ describe('run', () => {
       };
       await expect(run(plan(), ui, catching({ generate }))).rejects.toThrow('stop here');
       expect(process.exit).toHaveBeenCalledWith(130);
+    });
+  });
+});
+
+describe('what the run left behind', () => {
+  const STAMP = '20261027-000000';
+  const CLEAN = { removed: true, stopped: true };
+  const never = () => new Promise<void>(() => undefined);
+  const eio = () => Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' });
+  /** A `rename` that fails with EIO (never retried) on its Nth call. */
+  const failingOn = (nth: number): typeof rename => {
+    let calls = 0;
+    return (async (from, to) => {
+      calls += 1;
+      if (calls === nth) throw eio();
+      await rename(from, to);
+    }) as typeof rename;
+  };
+  const target = () => join(root, 'my-tools');
+  const backupDir = () => `${target()}.backup-${STAMP}`;
+  const nonEmpty = (...names: string[]) => {
+    mkdirSync(target());
+    for (const name of names.length ? names : ['notes.txt']) {
+      writeFileSync(join(target(), name), name);
+    }
+  };
+  const backUpWith =
+    (renameFn: typeof rename): RunDeps['backUp'] =>
+    (t, now, d) =>
+      backUp(t, now, { ...d, rename: renameFn });
+  const moveWith =
+    (renameFn: typeof rename): RunDeps['moveIntoPlace'] =>
+    (temp, to) =>
+      moveIntoPlace(temp, to, { rename: renameFn });
+  /** Runs to a failure and returns the `left` that run() recorded. */
+  const stopped = async (planOverrides: Partial<RunPlan>, overrides: Partial<RunDeps> = {}) => {
+    const error = await run(plan(planOverrides), recordingUi(), deps(overrides)).catch(
+      (e: unknown) => e
+    );
+    expect(error).toBeInstanceOf(Error);
+    return leftOf(error);
+  };
+
+  describe('after a failure, against the disk', () => {
+    it('a toolchain failure with replace on a non-empty target leaves it unchanged', async () => {
+      nonEmpty();
+      const exec = fakeExec({ 'pnpm --version': { code: 0, stdout: '9.15.9\n' } });
+      expect(await stopped({ replace: true }, { exec })).toEqual({ target: 'unchanged' });
+      expect(readdirSync(target())).toEqual(['notes.txt']);
+    });
+
+    it('a failed install leaves the target as it was, with no temp folder', async () => {
+      const exec = fakeExec({ 'pnpm install': { code: 1 } });
+      expect(await stopped({}, { exec })).toEqual({ target: 'missing' });
+      mkdirSync(target());
+      expect(await stopped({}, { exec })).toEqual({ target: 'empty' });
+      expect(leftovers()).toEqual(['my-tools']);
+    });
+
+    it('never touches a non-empty target without replace', async () => {
+      nonEmpty();
+      expect(await stopped({}, { moveIntoPlace: undefined })).toEqual({ target: 'unchanged' });
+      expect(readdirSync(target())).toEqual(['notes.txt']);
+    });
+
+    it('backup failing on the first entry, in place: unchanged, no backup folder', async () => {
+      nonEmpty('a.txt', 'b.txt');
+      const left = await stopped(
+        { replace: true },
+        { cwd: target(), backUp: backUpWith(failingOn(1)) }
+      );
+      expect(left).toEqual({ target: 'unchanged' });
+      expect(readdirSync(target()).sort()).toEqual(['a.txt', 'b.txt']);
+      expect(leftovers().some((name) => name.includes('.backup-'))).toBe(false);
+    });
+
+    it('backup failing on a later entry: split, the backup holds exactly the moved entries', async () => {
+      nonEmpty('a.txt', 'b.txt');
+      const left = await stopped(
+        { replace: true },
+        { cwd: target(), backUp: backUpWith(failingOn(2)) }
+      );
+      expect(left).toEqual({ target: 'split', backup: backupDir() });
+      const moved = readdirSync(backupDir());
+      expect(moved).toHaveLength(1);
+      expect([...moved, ...readdirSync(target())].sort()).toEqual(['a.txt', 'b.txt']);
+    });
+
+    it('backup failing on a whole-folder rename: unchanged, no backup', async () => {
+      nonEmpty('a.txt', 'b.txt');
+      const left = await stopped({ replace: true }, { backUp: backUpWith(failingOn(1)) });
+      expect(left).toEqual({ target: 'unchanged' });
+      expect(readdirSync(target()).sort()).toEqual(['a.txt', 'b.txt']);
+    });
+
+    it('move failing after an in-place backup, before any entry moved: empty, with the backup', async () => {
+      nonEmpty('a.txt');
+      const left = await stopped(
+        { replace: true },
+        { cwd: target(), moveIntoPlace: moveWith(failingOn(1)) }
+      );
+      expect(left).toEqual({ target: 'empty', backup: backupDir() });
+      expect(readdirSync(backupDir())).toEqual(['a.txt']);
+    });
+
+    it('move failing after a whole-folder backup: missing, with the backup', async () => {
+      nonEmpty('a.txt');
+      const left = await stopped({ replace: true }, { moveIntoPlace: moveWith(failingOn(1)) });
+      expect(left).toEqual({ target: 'missing', backup: backupDir() });
+      expect(readdirSync(backupDir())).toEqual(['a.txt']);
+    });
+
+    it('move failing partway into an empty target: partial', async () => {
+      mkdirSync(target());
+      const left = await stopped({}, { moveIntoPlace: moveWith(failingOn(2)) });
+      expect(left).toEqual({ target: 'partial' });
+      expect(readdirSync(target())).toHaveLength(1);
+    });
+
+    it('reports a temporary folder that could not be deleted', async () => {
+      const exec = fakeExec({ 'pnpm install': { code: 1, stderr: 'network down' } });
+      const rm: RunDeps['rm'] = async () => {
+        throw new Error('EBUSY');
+      };
+      const error = await run(plan(), recordingUi(), deps({ exec, rm })).catch((e: unknown) => e);
+      expect(error).toMatchObject({ code: 'install-failed' });
+      expect(leftOf(error)).toEqual({
+        target: 'missing',
+        temp: expect.stringMatching(/\.my-tools\.tmp-[0-9a-f]{8}$/),
+      });
+    });
+
+    it('rethrows a thrown string untouched and records nothing for it', async () => {
+      const generate: RunDeps['generate'] = async () => {
+        throw 'just a string';
+      };
+      const error = await run(plan(), recordingUi(), deps({ generate })).catch((e: unknown) => e);
+      expect(error).toBe('just a string');
+      expect(leftOf(error)).toBeUndefined();
+    });
+  });
+
+  describe('leftBehind, with a fake read', () => {
+    const reads =
+      (found: Record<string, Probe>) =>
+      (path: string): Probe =>
+        found[path] ?? 'missing';
+    const T = '/t';
+    const B = '/t.backup';
+    const row = (
+      phase: Parameters<typeof leftBehind>[0],
+      before: Parameters<typeof leftBehind>[1],
+      found: Record<string, Probe>
+    ) => leftBehind(phase, before, reads(found), T);
+
+    it.each([
+      ['missing', { target: 'missing' }],
+      ['empty', { target: 'empty' }],
+      ['not-empty', { target: 'unchanged' }],
+    ] as const)('working, before %s', (before, left) => {
+      const read = () => {
+        throw new Error('not read');
+      };
+      expect(leftBehind({ at: 'working' }, before, read, T)).toEqual(left);
+    });
+
+    it('working with an unknown before is unknown', () => {
+      expect(leftBehind({ at: 'working' }, undefined, reads({}), T)).toEqual({ target: 'unknown' });
+    });
+
+    it('backing up before onPath: unchanged, nothing read, no backup', () => {
+      const read = () => {
+        throw new Error('not read');
+      };
+      expect(leftBehind({ at: 'backing-up', inPlace: true }, 'not-empty', read, T)).toEqual({
+        target: 'unchanged',
+      });
+    });
+
+    it.each([
+      ['backing-up', { at: 'backing-up', inPlace: true, backup: B }],
+      ['backed-up', { at: 'backed-up', backup: B }],
+    ] as const)('%s, with a backup path', (_name, phase) => {
+      expect(row(phase, 'not-empty', { [T]: 'not-empty', [B]: 'missing' })).toEqual({
+        target: 'unchanged',
+      });
+      expect(row(phase, 'not-empty', { [T]: 'not-empty', [B]: 'empty' })).toEqual({
+        target: 'unchanged',
+      });
+      expect(row(phase, 'not-empty', { [T]: 'not-empty', [B]: 'not-empty' })).toEqual({
+        target: 'split',
+        backup: B,
+      });
+      expect(row(phase, 'not-empty', { [T]: 'missing', [B]: 'not-empty' })).toEqual({
+        target: 'missing',
+        backup: B,
+      });
+      expect(row(phase, 'not-empty', { [T]: 'empty', [B]: 'not-empty' })).toEqual({
+        target: 'empty',
+        backup: B,
+      });
+      expect(row(phase, 'not-empty', { [T]: 'missing', [B]: 'missing' })).toEqual({
+        target: 'unknown',
+      });
+      expect(row(phase, 'not-empty', { [T]: 'unreadable', [B]: 'not-empty' })).toEqual({
+        target: 'unknown',
+        backup: B,
+      });
+    });
+
+    it('moving: an empty or missing target keeps the backup only if it holds files', () => {
+      const phase = { at: 'moving', backup: B } as const;
+      expect(row(phase, 'not-empty', { [T]: 'missing', [B]: 'not-empty' })).toEqual({
+        target: 'missing',
+        backup: B,
+      });
+      expect(row(phase, 'not-empty', { [T]: 'empty', [B]: 'empty' })).toEqual({ target: 'empty' });
+      expect(row({ at: 'moving' }, 'missing', { [T]: 'missing' })).toEqual({ target: 'missing' });
+    });
+
+    it('moving into a target that has files is partial, unless nothing was allowed to move', () => {
+      expect(row({ at: 'moving' }, 'missing', { [T]: 'not-empty' })).toEqual({ target: 'partial' });
+      expect(row({ at: 'moving' }, 'empty', { [T]: 'not-empty' })).toEqual({ target: 'partial' });
+      expect(
+        row({ at: 'moving', backup: B }, 'not-empty', { [T]: 'not-empty', [B]: 'not-empty' })
+      ).toEqual({ target: 'partial', backup: B });
+      expect(row({ at: 'moving' }, 'not-empty', { [T]: 'not-empty' })).toEqual({
+        target: 'unchanged',
+      });
+    });
+
+    it('moved is complete, without reading, with the backup if there is one', () => {
+      const read = () => {
+        throw new Error('not read');
+      };
+      expect(leftBehind({ at: 'moved' }, 'missing', read, T)).toEqual({ target: 'complete' });
+      expect(leftBehind({ at: 'moved', backup: B }, 'not-empty', read, T)).toEqual({
+        target: 'complete',
+        backup: B,
+      });
+    });
+
+    it('an unreadable target is unknown, naming the backup only if it holds files', () => {
+      const phase = { at: 'moving', backup: B } as const;
+      expect(row(phase, 'not-empty', { [T]: 'unreadable', [B]: 'not-empty' })).toEqual({
+        target: 'unknown',
+        backup: B,
+      });
+      expect(row(phase, 'not-empty', { [T]: 'unreadable', [B]: 'unreadable' })).toEqual({
+        target: 'unknown',
+      });
+    });
+  });
+
+  describe('on Ctrl-C, through onOutcome', () => {
+    type Exit = (code: number, outcome: { removed: boolean; stopped: boolean }) => void;
+    let interrupt: Exit | undefined;
+    let outcomes: Outcome[];
+    beforeEach(() => {
+      interrupt = undefined;
+      outcomes = [];
+      vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    });
+    const catching = (overrides: Partial<RunDeps> = {}) =>
+      deps({
+        onInterrupt: (_temp, options) => {
+          interrupt = options?.exit;
+          return () => log.push('unregister');
+        },
+        onOutcome: (outcome) => outcomes.push(outcome),
+        ...overrides,
+      });
+    /** Fires the interrupt like a signal, then never returns, as a real `process.exit` wouldn't. */
+    const hang =
+      (outcome = CLEAN, land = false): typeof rename =>
+      async (from, to) => {
+        if (land) await rename(from, to);
+        interrupt?.(130, outcome);
+        return never();
+      };
+    const left = async (ui: ReturnType<typeof recordingUi>) => {
+      await vi.waitFor(() => expect(outcomes).toHaveLength(1));
+      expect(ui.calls.some((call) => call.startsWith('fail:'))).toBe(true);
+      const [outcome] = outcomes;
+      expect(outcome).toMatchObject({ ok: false, error: { code: 'interrupted' } });
+      return outcome && !outcome.ok ? outcome.left : undefined;
+    };
+    const ctrlC = async (planOverrides: Partial<RunPlan>, overrides: Partial<RunDeps>) => {
+      const ui = recordingUi();
+      void run(plan(planOverrides), ui, catching(overrides));
+      return { ui, found: await left(ui) };
+    };
+
+    it('while working: the target as it was', async () => {
+      const generate: RunDeps['generate'] = async () => {
+        interrupt?.(130, CLEAN);
+        throw new Error('stop here');
+      };
+      const ui = recordingUi();
+      await expect(run(plan(), ui, catching({ generate }))).rejects.toThrow('stop here');
+      expect(outcomes[0]).toMatchObject({ left: { target: 'missing' } });
+      expect(outcomes[0]).not.toHaveProperty('left.temp');
+    });
+
+    it('says what stayed behind when nothing was cleaned up or stopped', async () => {
+      const generate: RunDeps['generate'] = async () => {
+        interrupt?.(130, { removed: false, stopped: false });
+        throw new Error('stop here');
+      };
+      await expect(run(plan(), recordingUi(), catching({ generate }))).rejects.toThrow();
+      expect(outcomes[0]).toMatchObject({
+        left: { target: 'missing', temp: expect.stringMatching(/\.my-tools\.tmp-/), running: true },
+      });
+    });
+
+    it('while backing up a folder that is not the current one, before the rename lands: unchanged', async () => {
+      nonEmpty();
+      const { found } = await ctrlC({ replace: true }, { backUp: backUpWith(hang()) });
+      expect(found).toEqual({ target: 'unchanged' });
+      expect(readdirSync(target())).toEqual(['notes.txt']);
+    });
+
+    it('after the whole-folder rename landed, reports the backup', async () => {
+      nonEmpty();
+      const { found } = await ctrlC({ replace: true }, { backUp: backUpWith(hang(CLEAN, true)) });
+      expect(found).toEqual({ target: 'missing', backup: backupDir() });
+    });
+
+    it('after a target that is a file was renamed away, reports it as the backup', async () => {
+      writeFileSync(target(), 'i am a file');
+      const { found } = await ctrlC({ replace: true }, { backUp: backUpWith(hang(CLEAN, true)) });
+      expect(found).toEqual({ target: 'missing', backup: backupDir() });
+    });
+
+    it('names the -1 folder when the base backup name is taken', async () => {
+      nonEmpty();
+      mkdirSync(backupDir());
+      writeFileSync(join(backupDir(), 'older.txt'), 'older');
+      const { ui, found } = await ctrlC(
+        { replace: true },
+        { backUp: backUpWith(hang(CLEAN, true)) }
+      );
+      expect(found).toEqual({ target: 'missing', backup: `${backupDir()}-1` });
+      expect(ui.calls.at(-1)).toBe(
+        `fail: Cancelled. Your files are in ${target()}, or in my-tools.backup-${STAMP}-1 beside it.`
+      );
+    });
+
+    it('in place, before the first entry moves: unchanged, and the empty backup folder is removed', async () => {
+      nonEmpty('a.txt', 'b.txt');
+      const { found } = await ctrlC(
+        { replace: true },
+        { cwd: target(), backUp: backUpWith(hang()) }
+      );
+      expect(found).toEqual({ target: 'unchanged' });
+      expect(existsSync(backupDir())).toBe(false);
+      expect(readdirSync(target()).sort()).toEqual(['a.txt', 'b.txt']);
+    });
+
+    it('in place, after one entry moved: split, and the backup folder and its entry stay', async () => {
+      nonEmpty('a.txt', 'b.txt');
+      const { found } = await ctrlC(
+        { replace: true },
+        { cwd: target(), backUp: backUpWith(hang(CLEAN, true)) }
+      );
+      expect(found).toEqual({ target: 'split', backup: backupDir() });
+      expect(readdirSync(backupDir())).toHaveLength(1);
+      expect(readdirSync(target())).toHaveLength(1);
+    });
+
+    it('before the backup path is known, an earlier empty backup folder is not touched', async () => {
+      nonEmpty('a.txt');
+      mkdirSync(backupDir());
+      const backUpEarly: RunDeps['backUp'] = async () => {
+        interrupt?.(130, CLEAN);
+        return never() as never;
+      };
+      const { found } = await ctrlC({ replace: true }, { cwd: target(), backUp: backUpEarly });
+      expect(found).toEqual({ target: 'unchanged' });
+      expect(existsSync(backupDir())).toBe(true);
+    });
+
+    it('while moving with no backup, after the rename landed: partial', async () => {
+      const { found } = await ctrlC({}, { moveIntoPlace: moveWith(hang(CLEAN, true)) });
+      expect(found).toEqual({ target: 'partial' });
+    });
+
+    it('while moving after a backup, before the rename lands: missing, with the backup', async () => {
+      nonEmpty();
+      const { found } = await ctrlC({ replace: true }, { moveIntoPlace: moveWith(hang()) });
+      expect(found).toEqual({ target: 'missing', backup: backupDir() });
+    });
+
+    it('after the move: complete', async () => {
+      const ui = recordingUi();
+      await run(plan(), ui, catching());
+      interrupt?.(130, CLEAN);
+      expect(outcomes[0]).toMatchObject({ left: { target: 'complete' } });
+    });
+
+    it('after the move with a backup: complete, naming it', async () => {
+      nonEmpty();
+      await run(plan({ replace: true }), recordingUi(), catching());
+      interrupt?.(130, CLEAN);
+      expect(outcomes[0]).toMatchObject({ left: { target: 'complete', backup: backupDir() } });
+    });
+
+    describe('when reading the disk or reporting fails', () => {
+      it.each([
+        ['backing up', 'backUp'],
+        ['moving', 'moveIntoPlace'],
+      ] as const)(
+        'still prints and exits 130 when the probe throws while %s',
+        async (_name, step) => {
+          nonEmpty();
+          const probe = vi.fn((): never => {
+            throw new Error('EIO on read');
+          });
+          const ui = recordingUi();
+          const overrides =
+            step === 'backUp'
+              ? { backUp: backUpWith(hang()) }
+              : { moveIntoPlace: moveWith(hang()) };
+          void run(plan({ replace: true }), ui, catching({ ...overrides, probe }));
+          await vi.waitFor(() => expect(process.exit).toHaveBeenCalledWith(130));
+          expect(probe).toHaveBeenCalled();
+          expect(ui.calls.at(-1)).toMatch(/^fail: Cancelled\. Your files are in /);
+          expect(outcomes[0]).toMatchObject({ left: { target: 'unknown' } });
+        }
+      );
+
+      it('still prints and exits 130 when onOutcome throws', async () => {
+        nonEmpty();
+        const ui = recordingUi();
+        const onOutcome = vi.fn((): never => {
+          throw new Error('consumer broke');
+        });
+        void run(plan({ replace: true }), ui, catching({ backUp: backUpWith(hang()), onOutcome }));
+        await vi.waitFor(() => expect(process.exit).toHaveBeenCalledWith(130));
+        expect(onOutcome).toHaveBeenCalled();
+        expect(ui.calls.at(-1)).toMatch(/^fail: Cancelled\. Your files are in /);
+      });
     });
   });
 });

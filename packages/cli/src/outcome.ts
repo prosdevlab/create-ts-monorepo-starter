@@ -1,3 +1,6 @@
+import type { PnpmStatus } from './pnpm.js';
+import type { RunPlan, RunResult } from './run.js';
+
 export type ErrorCode =
   | 'usage'
   | 'target-not-empty'
@@ -25,7 +28,7 @@ export const ERROR_CODES: ReadonlySet<string> = new Set<ErrorCode>([
   'unexpected',
 ]);
 
-export const USAGE = 2;
+const USAGE = 2;
 export const FAILURE = 1;
 /** The machine needs fixing first (pnpm can't switch versions, or is too old); nothing was created. */
 export const TOOLCHAIN = 3;
@@ -83,3 +86,42 @@ export function coded(code: ErrorCode, error: unknown): Error {
     }
   );
 }
+
+/** What the run left on disk, read from the disk itself. */
+export interface Left {
+  target: 'missing' | 'empty' | 'unchanged' | 'partial' | 'complete' | 'split' | 'unknown';
+  /** Where the person's files are, all or some of them. */
+  backup?: string;
+  /** A temporary folder that couldn't be deleted. */
+  temp?: string;
+  /** pnpm may still be running. */
+  running?: true;
+}
+
+interface Fix {
+  argv?: string[];
+  see?: string;
+  scope: 'user' | 'project';
+}
+
+interface Problem {
+  code: string;
+  title: string;
+  lines: string[];
+  fixes: Fix[];
+}
+
+export interface Failure {
+  code: ErrorCode;
+  title: string;
+  lines: string[];
+  fixes: Fix[];
+  required?: Record<string, string>;
+  found?: Record<string, string>;
+}
+
+/** How a run ended: what happened, what it left behind, and for a failure, a code. */
+export type Outcome =
+  | { ok: true; kind: 'created'; plan: RunPlan; result: RunResult; warnings: Problem[]; left: Left }
+  | { ok: true; kind: 'checked'; pnpm: PnpmStatus; warnings: Problem[] }
+  | { ok: false; error: Failure; left?: Left; retry?: string[] };
