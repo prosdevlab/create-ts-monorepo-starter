@@ -83,7 +83,14 @@ describe.concurrent('a generated project passes its own CI', () => {
           await pnpm('install', '--frozen-lockfile');
           expect((await git(['status', '--porcelain'])).stdout).toBe('');
 
-          for (const script of ['lint', 'check:unused', 'build', 'typecheck', 'test']) {
+          for (const script of [
+            'lint',
+            'check:changesets',
+            'check:unused',
+            'build',
+            'typecheck',
+            'test',
+          ]) {
             await pnpm(script);
           }
           await pnpm('check:packages');

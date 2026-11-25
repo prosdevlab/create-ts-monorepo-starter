@@ -61,7 +61,11 @@ describe('generate', () => {
     expect(existsSync(join(to, '_gitignore'))).toBe(false);
     expect(existsSync(join(to, 'scripts/check-examples.mjs'))).toBe(false);
     expect(existsSync(join(to, 'scripts/check-examples.test.ts'))).toBe(false);
-    expect(existsSync(join(to, 'scripts'))).toBe(false);
+    // The changeset check ships in generated projects.
+    expect(readdirSync(join(to, 'scripts')).sort()).toEqual([
+      'check-changesets.mjs',
+      'check-changesets.test.ts',
+    ]);
     for (const [file, text] of textFiles(to)) {
       if (file !== 'pnpm-lock.yaml') expect(text, file).not.toContain('@monorepo');
       expect(text, file).not.toContain('example:');
@@ -77,12 +81,14 @@ describe('generate', () => {
     expect(readme).not.toContain('ts-monorepo-starter');
   });
 
-  it('keeps scripts/ when it still holds other files', async () => {
+  it('removes scripts/ when the template-only files were all of it', async () => {
     const from = tempDir();
     cpSync(templateDir(), from, { recursive: true });
-    writeFileSync(join(from, 'scripts', 'keep.mjs'), 'export {};\n');
+    for (const file of ['check-changesets.mjs', 'check-changesets.test.ts']) {
+      rmSync(join(from, 'scripts', file));
+    }
     const to = await run(['lib', 'cli', 'web'], join(tempDir(), 'out'), from);
-    expect(readdirSync(join(to, 'scripts'))).toEqual(['keep.mjs']);
+    expect(existsSync(join(to, 'scripts'))).toBe(false);
   });
 
   it('keeps hooks executable', async () => {
