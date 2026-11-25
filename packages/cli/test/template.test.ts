@@ -55,7 +55,8 @@ describe('bundled template', () => {
       TEMPLATE_DIST: join(dir, 'dist'),
     });
     expect(result.status).toBe(1);
-    expect(result.stderr).toMatch(/v2\.3\.0 points at [0-9a-f]{40}, expected 0{40}/);
+    expect(result.stderr).toContain(`${pinned.tag} points at `);
+    expect(result.stderr).toMatch(/points at [0-9a-f]{40}, expected 0{40}/);
     expect(existsSync(join(dir, 'dist'))).toBe(false);
   });
 
