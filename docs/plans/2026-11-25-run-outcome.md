@@ -75,7 +75,7 @@ interface Failure {
 
 **Exit codes**, decided by `exitCode(outcome)` only: 0 ok · 2 `usage` · 3 `pnpm-too-old`, `pnpm-switch-failed` · 4 `install-failed` · 130 `cancelled`, `interrupted` · 1 everything else, **including any code `exitCode` doesn't know**.
 
-**How a failure gets its code:** `codeOf(error)` returns the error's `code` only when it is one of the CLI's own (`ERROR_CODES.has(code)`), else `unexpected`. Node's errors carry codes like `ENOSPC` or `EACCES`; without the membership check, a full disk would be classified as `'ENOSPC'`, map to no exit code, and the CLI would exit 0. `CliError` sets a code; `LockfileError`, `NameError` and `CancelledError` keep their classes, names and messages and gain a `code` property. A plain `Error` from spawning the install (for example cmd.exe refusing an argument) stays `unexpected`: exit 4 is for an install that ran and failed.
+**How a failure gets its code:** `codeOf(error)` returns the error's `code` only when it is one of the CLI's own (`ERROR_CODES.has(code)`), else `unexpected`. Node's errors carry codes like `ENOSPC` or `EACCES`; without the membership check, a full disk would be classified as `'ENOSPC'`, map to no exit code, and the CLI would exit 0. `CliError` sets a code; `LockfileError`, `NameError` and `CancelledError` keep their classes, names and messages and gain a `code` property. **Errors from a step are classified where the step runs, never by changing them:** `run()` wraps an error from the backup step or the move step with `coded(code, error)`, a new `Error` with the same message, the CLI's code (`backup-failed` or `move-failed`) and the original as `cause`. The raw error keeps its own errno `code` (an object `rename` threw may be shared, and `backUp`'s retry decision reads that code), and the wrapper renders through the generic split, so the text is identical. A plain `Error` from spawning the install (for example cmd.exe refusing an argument) stays `unexpected`: exit 4 is for an install that ran and failed.
 
 **How a failure gets its text:** exactly as today's `report()` (`main.ts`). A `CliError` (`ToolchainError`, `RunError`) renders `title` and `lines`; any other error renders its message split on newlines, first line as the title, the rest as lines. An empty message renders an empty title: `report()`'s `'Something went wrong'` default never applies, because `''.split('\n')` is `['']`. Task 0 pins that, and this plan keeps it. A `LockfileError` keeps that split rendering.
 
@@ -119,7 +119,7 @@ For a failure, `temp` is set when `read(temp)` isn't `missing` after the guarded
 | `src/report.ts` | **New.** `renderText(outcome, ui)`: today's `report()` and `usage()` output, moved from `main.ts` |
 | `src/main.ts` | `MainIo.runDeps` (Task 0); `execute(argv, io): Promise<Outcome>`; `main` = `execute`, render, `exitCode` |
 | `src/run.ts` | `RunDeps.backUp`, `.rm` (Task 0), `.probe`, `.onOutcome`; `RunPlan.folder` (optional: as given); `leftBehind`; `leftOf(error)`; guarded cleanup; the interrupt handler builds and renders an interrupted `Outcome`; `RunError` codes |
-| `src/workspace.ts` | `backUp`'s `onPath` callback; both of `backUp`'s throw sites carry `code: 'backup-failed'` |
+| `src/workspace.ts` | `backUp`'s `onPath` callback (Task 3). No error changes: `run()` classifies them |
 | `src/pnpm.ts` | `ToolchainError` extends `CliError`; `tooOld` and `switchFailure` set their codes |
 | `src/lockfile.ts`, `src/names.ts`, `src/ui.ts` | `LockfileError`, `NameError`, `CancelledError` gain a `code` property |
 | `test/outcome.test.ts`, `test/report.test.ts` | **New.** |
@@ -168,12 +168,12 @@ Lands first, on today's code, with no behavior change.
 
 **Files:** Create `src/outcome.ts`, `test/outcome.test.ts`. Modify `src/pnpm.ts`, `src/run.ts`, `src/workspace.ts`, `src/lockfile.ts`, `src/names.ts`, `src/ui.ts`, `src/main.ts`.
 
-- [ ] **Step 1:** `CliError(code, message, lines)`, `ERROR_CODES` and `codeOf` in `outcome.ts`. `ToolchainError` and `RunError` extend `CliError`. `LockfileError`, `NameError` and `CancelledError` gain a `code` property, keeping their classes, `name` and message. Both of `backUp`'s throw sites (the in-place loop's wrapped error, and the whole-folder rename's raw error) get `code: 'backup-failed'` without changing their messages. An `lstat` error in the free-name lookup stays `unexpected`.
+- [ ] **Step 1:** `CliError(code, message, lines)`, `ERROR_CODES` and `codeOf` in `outcome.ts`. `ToolchainError` and `RunError` extend `CliError`. `LockfileError`, `NameError` and `CancelledError` gain a `code` property, keeping their classes, `name` and message. `coded(code, error)` in `outcome.ts`; `run()` wraps any error from `backUp` as `backup-failed` (both throw sites, and an `lstat` error in the free-name lookup, all of which happen in the backup step). `workspace.ts` is unchanged.
 - [ ] **Step 2:** `exitCode(outcome)`, falling back to 1. Move `USAGE`, `FAILURE`, `TOOLCHAIN`, `INTERRUPTED` from `main.ts`; `main.ts` re-exports `FAILURE` and `TOOLCHAIN` (imported by `cli.ts` and `main.test.ts`). If knip flags the re-export, import from `outcome.ts` in those two files instead.
 - [ ] **Step 3: Tests.**
   - `exitCode` against a `Record<ErrorCode, number>` literal of numbers (2, 3, 4, 130, 1), not the constants, so a new code without an entry fails typecheck; and an unknown code gives 1.
   - `codeOf` of `Object.assign(new Error('disk full'), { code: 'ENOSPC' })` is `unexpected`.
-  - Each source sets its own code: `tooOld(...)` → `pnpm-too-old`, `switchFailure(...)` → `pnpm-switch-failed`, a `LockfileError`, a `NameError`, a `CancelledError`, and the real `backUp` failing in place and on a whole-folder rename → `backup-failed`.
+  - Each source sets its own code: `tooOld(...)` → `pnpm-too-old`, `switchFailure(...)` → `pnpm-switch-failed`, a `LockfileError`, a `NameError`, a `CancelledError`, and `run()` with the real `backUp` failing in place and on a whole-folder rename → `backup-failed`, with `cause.code` still the rename's own code (`EIO`).
 - [ ] **Step 4:** Full CI sequence. Expected: Task 0's tests unchanged and passing.
 - [ ] **Commit:** `refactor: give every failure a code`
 
@@ -185,7 +185,7 @@ Lands first, on today's code, with no behavior change.
 - [ ] **Step 1: Failing tests.**
   - `run()` with a fake exec whose `pnpm install` exits 1 rejects with code `install-failed`; the same for `--no-install` (`--lockfile-only`) and for `kind: 'none'` (`npm exec`).
   - Through `main` with `runDeps`: a failed install returns 4; a lockfile change returns 1; a failed `git init` warns and returns 0; a failed move after a backup returns 1; a fake `generate` throwing an `ENOSPC` error returns 1.
-- [ ] **Step 2:** The install's `RunError` takes `install-failed`; the move failure after a backup takes `move-failed`. A move failure without a backup is rethrown as today, with `code: 'move-failed'` set on it and its message and rendering unchanged. `report()` maps an error through `codeOf` and `exitCode`.
+- [ ] **Step 2:** The install's `RunError` takes `install-failed`; the move failure after a backup takes `move-failed`. A move failure without a backup is wrapped with `coded('move-failed', error)`: same message and rendering, the original as `cause`. `report()` maps an error through `codeOf` and `exitCode`.
 - [ ] **Step 3: README.**
   - Add `| 4 | The install failed; retrying may work. Nothing was created |`.
   - Change code 1's text: "Something failed; the message says what, and where any of your files are".

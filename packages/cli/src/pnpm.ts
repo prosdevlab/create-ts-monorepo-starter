@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { constants, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
+import { CliError } from './outcome.js';
 import { pnpmSpec } from './template.js';
 
 export type PnpmStatus =
@@ -184,12 +185,9 @@ export async function detectPnpm(
 }
 
 /** A toolchain problem the user has to fix before anything is created; `lines` say how. */
-export class ToolchainError extends Error {
-  constructor(
-    message: string,
-    readonly lines: string[]
-  ) {
-    super(message);
+export class ToolchainError extends CliError {
+  constructor(code: 'pnpm-too-old' | 'pnpm-switch-failed', message: string, lines: string[]) {
+    super(code, message, lines);
     this.name = 'ToolchainError';
   }
 }
@@ -199,7 +197,7 @@ export const PNPM_HELP = 'https://github.com/prosdevlab/create-ts-monorepo-start
 /** The stop for a pnpm older than 10.26, which can't switch itself to the template's pnpm. */
 export function tooOld(found: string, spec: string): ToolchainError {
   const version = spec.slice('pnpm@'.length);
-  return new ToolchainError(`pnpm ${found} is too old for this project`, [
+  return new ToolchainError('pnpm-too-old', `pnpm ${found} is too old for this project`, [
     `This project needs pnpm 10.26 or newer, which switches itself to pnpm ${version}.`,
     'Upgrade pnpm: npm install -g pnpm (or https://pnpm.io/installation)',
     'Then run this command again. Nothing was created.',
@@ -263,6 +261,7 @@ export function switchFailure(
     .filter(Boolean)
     .slice(0, 2);
   return new ToolchainError(
+    'pnpm-switch-failed',
     `pnpm ${found} couldn't switch to pnpm ${version}, which this project needs`,
     [
       ...said.map((line) => `pnpm: ${line}`),

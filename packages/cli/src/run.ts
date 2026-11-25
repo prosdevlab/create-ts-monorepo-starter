@@ -5,6 +5,7 @@ import { generate } from './generate.js';
 import { initAndCommit, insideGitRepo } from './git.js';
 import { assertLockfileSubset } from './lockfile.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
+import { CliError, coded, type ErrorCode } from './outcome.js';
 import {
   checkSwitch,
   defaultExec,
@@ -67,12 +68,9 @@ export interface RunDeps {
 }
 
 /** A failure with the output lines that explain it. */
-export class RunError extends Error {
-  constructor(
-    message: string,
-    readonly lines: string[] = []
-  ) {
-    super(message);
+export class RunError extends CliError {
+  constructor(code: ErrorCode, message: string, lines: string[] = []) {
+    super(code, message, lines);
     this.name = 'RunError';
   }
 }
@@ -251,7 +249,11 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     }
     const seconds = Math.round((performance.now() - started) / 1000);
     if (output.code !== 0) {
-      throw new RunError(`Couldn't ${what} (pnpm exited with ${output.code})`, lastLines(output));
+      throw new RunError(
+        'unexpected',
+        `Couldn't ${what} (pnpm exited with ${output.code})`,
+        lastLines(output)
+      );
     }
     const installed = plan.install;
     ui.step(plan.install ? `Installed dependencies${using} (${seconds}s)` : 'Updated the lockfile');
@@ -286,7 +288,11 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     if (plan.replace && (await targetState(plan.target)) === 'not-empty') {
       const cwd = deps.cwd ?? process.cwd();
       phase = { at: 'backing-up', inPlace: await holdsCwd(plan.target, cwd) };
-      backup = await (deps.backUp ?? backUp)(plan.target, plan.now, { cwd });
+      try {
+        backup = await (deps.backUp ?? backUp)(plan.target, plan.now, { cwd });
+      } catch (error) {
+        throw coded('backup-failed', error);
+      }
       phase = { at: 'backed-up', backup };
       ui.step(`Moved the old ${name} to ${basename(backup)}`);
     }
@@ -296,9 +302,11 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
       phase = { at: 'moved' };
     } catch (error) {
       if (!backup) throw error;
-      throw new RunError(`Couldn't move the project into place: ${firstLine(error)}`, [
-        `The old files are in ${backup}.`,
-      ]);
+      throw new RunError(
+        'unexpected',
+        `Couldn't move the project into place: ${firstLine(error)}`,
+        [`The old files are in ${backup}.`]
+      );
     }
     return {
       pnpm,

@@ -3,6 +3,7 @@ import { basename } from 'node:path';
 import { EXAMPLES, type Options, parseArgv } from './args.js';
 import { gitIdentity } from './git.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
+import { FAILURE, INTERRUPTED, TOOLCHAIN, USAGE } from './outcome.js';
 import { checkSwitch, detectPnpm, type Exec, ToolchainError, tooOld } from './pnpm.js';
 import { planFromOptions, type RunDeps, RunError, type RunPlan, run } from './run.js';
 import { pnpmSpec } from './template.js';
@@ -20,11 +21,7 @@ import {
 } from './ui.js';
 import { backupPath, targetState } from './workspace.js';
 
-const USAGE = 2;
-export const FAILURE = 1;
-/** The machine needs fixing first (pnpm can't switch versions, or is too old); nothing was created. */
-export const TOOLCHAIN = 3;
-const INTERRUPTED = 130;
+export { FAILURE, TOOLCHAIN };
 
 const usage = (message: string) => {
   process.stderr.write(`${message}\n`);

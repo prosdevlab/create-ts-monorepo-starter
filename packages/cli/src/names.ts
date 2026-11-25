@@ -1,9 +1,11 @@
 import { basename, resolve } from 'node:path';
+import type { ErrorCode } from './outcome.js';
 
 const MAX_NAME_LENGTH = 214;
 
 export class NameError extends Error {
   override name = 'NameError';
+  readonly code: ErrorCode = 'usage';
 }
 
 // Folder -> npm package name: last path segment, lowercased, unsafe runs collapsed to "-".
