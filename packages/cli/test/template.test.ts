@@ -60,9 +60,15 @@ describe('bundled template', () => {
     expect(existsSync(join(dir, 'dist'))).toBe(false);
   });
 
-  it('turbo passes TEMPLATE_REF to the build task', () => {
+  it('turbo keys the build cache on every variable the template fetch reads', () => {
+    // Without one of these, a build that bundled another template is replayed for a normal build.
     const turbo = JSON.parse(readFileSync(join(root, '../../turbo.json'), 'utf8'));
-    expect(turbo.tasks.build.env).toContain('TEMPLATE_REF');
+    const script = readFileSync(join(root, 'scripts/fetch-template.mjs'), 'utf8');
+    const read = [...script.matchAll(/process\.env\.([A-Z_]+)/g)].map((m) => m[1]);
+    expect(read).toEqual(
+      expect.arrayContaining(['TEMPLATE_REF', 'TEMPLATE_VERSION_FILE', 'TEMPLATE_DIST'])
+    );
+    expect(turbo.tasks.build.env).toEqual(expect.arrayContaining(read));
   });
 
   it('fetch with TEMPLATE_REF records the branch commit', () => {

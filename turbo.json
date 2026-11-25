@@ -5,7 +5,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "env": ["TEMPLATE_REF"],
+      "env": ["TEMPLATE_REF", "TEMPLATE_VERSION_FILE", "TEMPLATE_DIST"],
       "outputs": ["dist/**", "build/**"]
     },
     "test": {
