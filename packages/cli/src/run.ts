@@ -59,6 +59,8 @@ export interface RunDeps {
   generate?: typeof generate;
   templateDir?: string;
   moveIntoPlace?: typeof moveIntoPlace;
+  backUp?: typeof backUp;
+  rm?: typeof rm;
   onInterrupt?: typeof onInterrupt;
   /** The folder the user's shell stands in; a backup never renames it. */
   cwd?: string;
@@ -284,7 +286,7 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     if (plan.replace && (await targetState(plan.target)) === 'not-empty') {
       const cwd = deps.cwd ?? process.cwd();
       phase = { at: 'backing-up', inPlace: await holdsCwd(plan.target, cwd) };
-      backup = await backUp(plan.target, plan.now, { cwd });
+      backup = await (deps.backUp ?? backUp)(plan.target, plan.now, { cwd });
       phase = { at: 'backed-up', backup };
       ui.step(`Moved the old ${name} to ${basename(backup)}`);
     }
@@ -307,7 +309,7 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
       ...(backup && { backup }),
     };
   } catch (error) {
-    await rm(temp, { recursive: true, force: true });
+    await (deps.rm ?? rm)(temp, { recursive: true, force: true });
     throw error;
   } finally {
     unregister();

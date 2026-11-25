@@ -147,4 +147,68 @@ describe('cli', () => {
     expect(readdirSync(root).sort()).toEqual(before);
     expect(existsSync(calls)).toBe(false);
   });
+
+  describe('exact text', () => {
+    const INTRO = /^create-ts-monorepo-starter \S+ · template \S+\n/;
+
+    it('prints an unknown flag and nothing else', () => {
+      const result = cli(['x', '--shout'], { NO_COLOR: '1' });
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe('Unknown option --shout. Run with --help to see the options.\n');
+    });
+
+    it('prints a bad folder name with -y', () => {
+      const result = cli(['!!!', '-y'], { NO_COLOR: '1' });
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe('Can\'t make an npm package name from "!!!"\n');
+    });
+
+    it('prints a bad scope with -y', () => {
+      const result = cli(['proj', '-y', '--scope', '@a b'], { NO_COLOR: '1' });
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe(
+        'Scope "@a b" can only contain lowercase letters, digits, "-", "." and "_".\n'
+      );
+    });
+
+    it('prints the intro, then the refusal of a non-empty folder', () => {
+      mkdirSync(join(root, 'full'));
+      writeFileSync(join(root, 'full', 'a'), 'x');
+      const result = cli(['full', '-y'], { NO_COLOR: '1' });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toMatch(new RegExp(`${INTRO.source}$`));
+      expect(result.stderr).toBe(
+        "✗ full isn't empty. Use another folder, or pass --force to move it aside.\n"
+      );
+    });
+
+    it('prints a --no-install run in full, in order', () => {
+      fakePnpm();
+      const result = cli(['proj', '--no-install', '-y'], { NO_COLOR: '1' });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout.replace(INTRO, '<intro>\n')).toBe(
+        [
+          '<intro>',
+          '✓ Created proj (@proj/lib, @proj/shared, @proj/cli, @proj/web)',
+          'Updating the lockfile…',
+          '✓ Updated the lockfile',
+          '✓ Initialized git with a first commit',
+          '',
+          "Dependencies aren't installed: the first pnpm install installs them and the git hooks.",
+          '',
+          'Next: cd proj && pnpm install && pnpm build && pnpm test',
+          '',
+          'When you want them (README section in brackets):',
+          '  • Previews on every PR: install the pkg.pr.new app, set PKG_PR_NEW [Preview Packages]',
+          '  • Private vulnerability reporting: Settings → Advanced Security [Issues, Pull Requests and Security Reports]',
+          '  • Publish to npm: add a repository field to each package, a trusted publisher for ci.yml, set NPM_PUBLISH [Setting Up npm Publishing]',
+          '',
+        ].join('\n')
+      );
+    }, 60_000);
+  });
 });

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Exec, ToolchainError } from '../src/pnpm';
 import { planFromOptions, type RunDeps, type RunPlan, run } from '../src/run';
 import type { Ui } from '../src/ui';
+import { backUp, moveIntoPlace } from '../src/workspace';
 
 const LOCKFILE = `lockfileVersion: '9.0'
 
@@ -408,6 +409,20 @@ describe('run', () => {
     expect(await readdir(target)).toEqual(['notes.txt']);
   });
 
+  it('removes the temporary folder with the rm it is given', async () => {
+    const removed: string[] = [];
+    const rm: RunDeps['rm'] = async (path, options) => {
+      removed.push(String(path));
+      expect(options).toEqual({ recursive: true, force: true });
+    };
+    const generate: RunDeps['generate'] = async () => {
+      throw new Error('stop here');
+    };
+    await expect(run(plan(), recordingUi(), deps({ generate, rm }))).rejects.toThrow('stop here');
+    expect(removed).toHaveLength(1);
+    expect(removed[0]).toMatch(/\.my-tools\.tmp-[0-9a-f]{8}$/);
+  });
+
   describe('on Ctrl-C', () => {
     type Exit = (code: number, outcome: { removed: boolean; stopped: boolean }) => void;
     const CLEAN = { removed: true, stopped: true };
@@ -505,6 +520,127 @@ describe('run', () => {
       interrupt?.(130, CLEAN);
       expect(ui.calls.at(-1)).toBe(
         `fail: Cancelled after the project was created in ${join(root, 'my-tools')}.`
+      );
+    });
+
+    describe('while the disk is busy', () => {
+      const BACKUP = 'my-tools.backup-20261027-000000';
+      /** Fires the interrupt like a signal would, then never returns, as a real `process.exit` wouldn't. */
+      const hang =
+        (outcome: { removed: boolean; stopped: boolean }): typeof rename =>
+        () => {
+          interrupt?.(130, outcome);
+          return new Promise<void>(() => undefined);
+        };
+      const nonEmpty = () => {
+        const target = join(root, 'my-tools');
+        mkdirSync(target);
+        writeFileSync(join(target, 'notes.txt'), 'keep me');
+        return target;
+      };
+      /** `run` never settles here, so wait for the message instead. */
+      const message = async (ui: ReturnType<typeof recordingUi>) => {
+        await vi.waitFor(() =>
+          expect(ui.calls.some((call) => call.startsWith('fail:'))).toBe(true)
+        );
+        return ui.calls.slice(ui.calls.lastIndexOf('stop'));
+      };
+
+      it('names both places while backing up a folder that is not the current one', async () => {
+        const target = nonEmpty();
+        const ui = recordingUi();
+        const backUpHung: RunDeps['backUp'] = (t, now, d) =>
+          backUp(t, now, { ...d, rename: hang(CLEAN) });
+        void run(plan({ replace: true }), ui, catching({ backUp: backUpHung }));
+        expect(await message(ui)).toEqual([
+          'stop',
+          `fail: Cancelled. Your files are in ${target}, or in ${BACKUP} beside it.`,
+        ]);
+        expect(process.exit).toHaveBeenCalledWith(130);
+      });
+
+      it('names the target, the backup and a split while backing up the current folder', async () => {
+        const target = nonEmpty();
+        const ui = recordingUi();
+        const backUpHung: RunDeps['backUp'] = (t, now, d) =>
+          backUp(t, now, { ...d, rename: hang(CLEAN) });
+        void run(plan({ replace: true }), ui, catching({ cwd: target, backUp: backUpHung }));
+        expect(await message(ui)).toEqual([
+          'stop',
+          `fail: Cancelled. Your files are in ${target}, in ${BACKUP} beside it, or split between the two.`,
+        ]);
+      });
+
+      it('adds both leftovers while backing up when nothing was cleaned up or stopped', async () => {
+        const target = nonEmpty();
+        const ui = recordingUi();
+        const backUpHung: RunDeps['backUp'] = (t, now, d) =>
+          backUp(t, now, { ...d, rename: hang({ removed: false, stopped: false }) });
+        void run(plan({ replace: true }), ui, catching({ cwd: target, backUp: backUpHung }));
+        expect((await message(ui)).at(-1)).toMatch(
+          new RegExp(
+            `^fail: Cancelled\\. Your files are in .*my-tools, in ${BACKUP} beside it, or split between the two\\. \\| Couldn't delete the temporary folder .*\\.my-tools\\.tmp-[0-9a-f]{8}: delete it yourself\\. \\| pnpm may still be running in it\\.$`
+          )
+        );
+      });
+
+      it('says the move was cancelled when no backup exists', async () => {
+        const ui = recordingUi();
+        const move: RunDeps['moveIntoPlace'] = (temp, to) =>
+          moveIntoPlace(temp, to, { rename: hang(CLEAN) });
+        void run(plan(), ui, catching({ moveIntoPlace: move }));
+        expect(await message(ui)).toEqual([
+          'stop',
+          `fail: Cancelled while moving the project into place. | The new project in ${join(root, 'my-tools')} may be incomplete.`,
+        ]);
+        expect(process.exit).toHaveBeenCalledWith(130);
+      });
+
+      it('adds the pnpm line when the temp folder went but pnpm did not stop', async () => {
+        const ui = recordingUi();
+        const move: RunDeps['moveIntoPlace'] = (temp, to) =>
+          moveIntoPlace(temp, to, { rename: hang({ removed: true, stopped: false }) });
+        void run(plan(), ui, catching({ moveIntoPlace: move }));
+        expect(await message(ui)).toEqual([
+          'stop',
+          `fail: Cancelled while moving the project into place. | The new project in ${join(root, 'my-tools')} may be incomplete. | pnpm may still be running in it.`,
+        ]);
+      });
+
+      it('adds the temp folder line when pnpm stopped but the folder could not be deleted', async () => {
+        const ui = recordingUi();
+        const move: RunDeps['moveIntoPlace'] = (temp, to) =>
+          moveIntoPlace(temp, to, { rename: hang({ removed: false, stopped: true }) });
+        void run(plan(), ui, catching({ moveIntoPlace: move }));
+        expect((await message(ui)).at(-1)).toMatch(
+          /^fail: Cancelled while moving the project into place\. \| The new project in .*my-tools may be incomplete\. \| Couldn't delete the temporary folder .*\.my-tools\.tmp-[0-9a-f]{8}: delete it yourself\.$/
+        );
+      });
+    });
+
+    it('says only that pnpm may still run when the temp folder went but pnpm did not stop', async () => {
+      const ui = recordingUi();
+      const generate: RunDeps['generate'] = async () => {
+        interrupt?.(130, { removed: true, stopped: false });
+        throw new Error('stop here');
+      };
+      await expect(run(plan(), ui, catching({ generate }))).rejects.toThrow('stop here');
+      expect(ui.calls).toEqual([
+        'stop',
+        'fail: Cancelled. Nothing was written. | pnpm may still be running in it.',
+      ]);
+    });
+
+    it('says only that the temp folder is left when pnpm stopped but the folder stayed', async () => {
+      const ui = recordingUi();
+      const generate: RunDeps['generate'] = async () => {
+        interrupt?.(130, { removed: false, stopped: true });
+        throw new Error('stop here');
+      };
+      await expect(run(plan(), ui, catching({ generate }))).rejects.toThrow('stop here');
+      expect(ui.calls).toHaveLength(2);
+      expect(ui.calls.at(-1)).toMatch(
+        /^fail: Cancelled\. \| Couldn't delete the temporary folder .*\.my-tools\.tmp-[0-9a-f]{8}: delete it yourself\.$/
       );
     });
 

@@ -4,7 +4,7 @@ import { EXAMPLES, type Options, parseArgv } from './args.js';
 import { gitIdentity } from './git.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
 import { checkSwitch, detectPnpm, type Exec, ToolchainError, tooOld } from './pnpm.js';
-import { planFromOptions, RunError, type RunPlan, run } from './run.js';
+import { planFromOptions, type RunDeps, RunError, type RunPlan, run } from './run.js';
 import { pnpmSpec } from './template.js';
 import {
   type Ask,
@@ -122,6 +122,8 @@ export interface MainIo {
   prompts?: Prompts;
   /** Runs commands for `--check`. */
   exec?: Exec;
+  /** Passed to `run`. */
+  runDeps?: RunDeps;
 }
 
 /** `--check`: is this machine's pnpm ready for the template's? Creates nothing. */
@@ -205,7 +207,7 @@ export async function main(argv: string[], io: MainIo = {}): Promise<number> {
       plan.replace = true;
     }
     plan ??= await askPlan(createAsk(io.prompts), cwd, options, now, holder);
-    const result = await run(plan, ui);
+    const result = await run(plan, ui, io.runDeps);
     ui.outro(result, plan);
     return 0;
   } catch (error) {

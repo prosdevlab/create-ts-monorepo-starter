@@ -77,7 +77,7 @@ interface Failure {
 
 **How a failure gets its code:** `codeOf(error)` returns the error's `code` only when it is one of the CLI's own (`ERROR_CODES.has(code)`), else `unexpected`. Node's errors carry codes like `ENOSPC` or `EACCES`; without the membership check, a full disk would be classified as `'ENOSPC'`, map to no exit code, and the CLI would exit 0. `CliError` sets a code; `LockfileError`, `NameError` and `CancelledError` keep their classes, names and messages and gain a `code` property. A plain `Error` from spawning the install (for example cmd.exe refusing an argument) stays `unexpected`: exit 4 is for an install that ran and failed.
 
-**How a failure gets its text:** exactly as today's `report()` (`main.ts`). A `CliError` (`ToolchainError`, `RunError`) renders `title` and `lines`; any other error renders its message split on newlines, first line as the title, the rest as lines, `Something went wrong` when empty. A `LockfileError` keeps that split rendering.
+**How a failure gets its text:** exactly as today's `report()` (`main.ts`). A `CliError` (`ToolchainError`, `RunError`) renders `title` and `lines`; any other error renders its message split on newlines, first line as the title, the rest as lines. An empty message renders an empty title: `report()`'s `'Something went wrong'` default never applies, because `''.split('\n')` is `['']`. Task 0 pins that, and this plan keeps it. A `LockfileError` keeps that split rendering.
 
 
 ## What the run left behind
@@ -156,7 +156,7 @@ Lands first, on today's code, with no behavior change.
   - a cancelled prompt: `['intro', 'fail: Cancelled. Nothing was written.']`, exit 130;
   - each `--check` result with its full `[title, ...lines]`: ready, pnpm missing, too old, switch failed;
   - a success: `intro`, the steps, then `outro` exactly once;
-  - through `runDeps`: a failed install, a lockfile change (title `Lockfile changed during install:` with the `+ …` lines), a failed move with and without a backup, a failed backup on the first entry, on a later entry and on a whole-folder rename, an error with an empty message (`Something went wrong`), and a `generate` that throws a string (rendered with `String(error)`);
+  - through `runDeps`: a failed install, a lockfile change (title `Lockfile changed during install:` with the `+ …` lines), a failed move with and without a backup, a failed backup on the first entry, on a later entry and on a whole-folder rename, an error with an empty message (an empty title, see "How a failure gets its text"), and a `generate` that throws a string (rendered with `String(error)`);
   - `interactive: true` without `io.ui` selects `clackUi`: a fake prompt that cancels, and a spy on `process.stdout.write` seeing clack's `┌` intro.
 - [ ] **Step 5: The interrupt messages not pinned today** (`run.test.ts`, "on Ctrl-C"): backing up in place and not in place, moving without a backup, and the mixed `removed`/`stopped` cases. The `rename` fake fires the interrupt and returns a promise that never settles, as a real `process.exit` would; the test asserts the `Ui` calls without awaiting `run` (the pattern of the existing "on Ctrl-C" tests). So Task 3's handler, which may remove an empty backup folder, can't make a later step fail and force an edit.
 - [ ] **Step 6: `--check` errors outside `main`'s `try` reject today.** An `exec` that throws **synchronously** (a rejecting `async` one is caught by `detectPnpm` as "pnpm missing") makes `main` reject. Pin that. (`check()`'s rethrow at `main.ts` needs `mkdtemp` to fail and has no seam; it isn't pinned.)
