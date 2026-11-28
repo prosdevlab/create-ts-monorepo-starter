@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { CANCEL_SYMBOL } from '@clack/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execute, main, TOOLCHAIN } from '../src/main';
@@ -10,16 +10,55 @@ import type { Exec } from '../src/pnpm';
 import type { RunDeps } from '../src/run';
 import { pnpmSpec } from '../src/template';
 import type { Prompts, Ui } from '../src/ui';
-import { backUp, moveIntoPlace } from '../src/workspace';
+import { backUp, type InterruptDeps, moveIntoPlace } from '../src/workspace';
 
+const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
 let cwd: string;
+let listening: ((...args: never) => unknown)[][];
+let exitCodeBefore: typeof process.exitCode;
 beforeEach(() => {
   cwd = mkdtempSync(join(tmpdir(), 'ctms-main-'));
+  listening = SIGNALS.map((signal) => process.listeners(signal));
+  exitCodeBefore = process.exitCode;
 });
 afterEach(() => {
   rmSync(cwd, { recursive: true, force: true });
   vi.restoreAllMocks();
+  // `execute` registers its handlers for the life of the process; a test process outlives many.
+  SIGNALS.forEach((signal, i) => {
+    for (const listener of process.listeners(signal)) {
+      if (!listening[i]?.includes(listener)) process.off(signal, listener as () => void);
+    }
+  });
+  process.exitCode = exitCodeBefore;
 });
+
+/** The command-level handler's seams: `fire` runs every handler registered, as a signal would. */
+const signals = () => {
+  const handlers: (() => void)[] = [];
+  const log: string[] = [];
+  const deps: InterruptDeps = {
+    on: (handler) => {
+      handlers.push(handler);
+      return () => undefined;
+    },
+    live: () => true,
+    // Resolves on a later tick, as a real stop does.
+    stop: () => {
+      log.push('stop');
+      return new Promise((done) => setTimeout(() => done(true), 5));
+    },
+    remove: (path) => {
+      log.push(`remove ${path}`);
+      rmSync(path, { recursive: true, force: true });
+    },
+    exit: (code) => log.push(`exit ${code}`),
+  };
+  const fire = () => {
+    for (const handler of handlers) handler();
+  };
+  return { deps, log, handlers, fire };
+};
 
 describe('main, interactive', () => {
   const setup = () => {
@@ -823,5 +862,171 @@ packages:
     });
     expect(outcome).toMatchObject({ ok: false, error: { code: 'install-failed' } });
     expect(!outcome.ok && outcome.left?.temp).toMatch(/\.my-tools\.tmp-[0-9a-f]{8}$/);
+  });
+});
+
+describe('the command-level interrupt', () => {
+  const LOCKFILE = "lockfileVersion: '9.0'\n";
+  const isScratch = (path: string) => basename(path).startsWith('ctms-pnpm-');
+  /** `main` never resolves once interrupted: the handler exits. */
+  const pending = (promise: Promise<unknown>) => {
+    let settled = false;
+    void promise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    return () => settled;
+  };
+  const cancelled = (calls: string[]) => calls.filter((call) => call.startsWith('fail:'));
+
+  it('during --check: stops pnpm, removes its folder, reports once and exits 130', async () => {
+    const { deps, log, fire } = signals();
+    let dir = '';
+    // The stopped pnpm exits non-zero a tick later; nothing may act on that.
+    const exec: Exec = async (_cmd, _args, { cwd: at }) => {
+      if (!isScratch(at)) return { code: 0, stdout: '10.28.0\n', stderr: '' };
+      dir = at;
+      fire();
+      await new Promise((done) => setTimeout(done, 1));
+      return { code: 1, stdout: '', stderr: 'killed' };
+    };
+    const { calls, ui } = recordingUi();
+    const settled = pending(main(['--check'], { cwd, ui, exec, interruptDeps: deps }));
+    await vi.waitFor(() => expect(log).toContain('exit 130'));
+    await new Promise((done) => setTimeout(done, 20));
+    expect(log).toEqual(['stop', `remove ${dir}`, 'exit 130']);
+    expect(existsSync(dir)).toBe(false);
+    expect(cancelled(calls)).toEqual(['fail: Cancelled. Nothing was written.']);
+    expect(settled()).toBe(false);
+  });
+
+  it('while reading the git identity: the same, and run never starts', async () => {
+    const { deps, log, fire } = signals();
+    // Both reads start together; firing on the second lets the first one's result arrive after
+    // the signal, and dropping it is all that stops the command from going on.
+    const exec: Exec = async (_cmd, args) => {
+      if (args[1] === 'user.email') {
+        fire();
+        await new Promise((done) => setTimeout(done, 1));
+      }
+      return { code: 0, stdout: 'Ada\n', stderr: '' };
+    };
+    const generate = vi.fn();
+    const { calls, ui } = recordingUi();
+    const settled = pending(
+      main(['my-tools', '-y'], { cwd, ui, exec, interruptDeps: deps, runDeps: { generate } })
+    );
+    await vi.waitFor(() => expect(log).toContain('exit 130'));
+    await new Promise((done) => setTimeout(done, 20));
+    expect(log).toEqual(['stop', 'exit 130']);
+    expect(generate).not.toHaveBeenCalled();
+    expect(readdirSync(cwd)).toEqual([]);
+    expect(calls).toEqual(['stop', 'fail: Cancelled. Nothing was written.']);
+    expect(settled()).toBe(false);
+  });
+
+  it('during the folder check, which runs no command: only the cancel is printed', async () => {
+    const { deps, log, fire } = signals();
+    mkdirSync(join(cwd, 'my-tools'));
+    writeFileSync(join(cwd, 'my-tools', 'a.txt'), 'a');
+    const exec: Exec = async () => ({ code: 0, stdout: '', stderr: '' });
+    const { calls, ui } = recordingUi();
+    // The last thing before the folder is read: the command finds it not empty after the signal.
+    const firing: Ui = {
+      ...ui,
+      intro: () => {
+        ui.intro();
+        fire();
+      },
+    };
+    const settled = pending(
+      main(['my-tools', '-y'], { cwd, ui: firing, exec, interruptDeps: deps })
+    );
+    await vi.waitFor(() => expect(log).toContain('exit 130'));
+    await new Promise((done) => setTimeout(done, 20));
+    expect(calls).toEqual(['intro', 'stop', 'fail: Cancelled. Nothing was written.']);
+    expect(settled()).toBe(false);
+  });
+
+  it('right before run(): run never starts', async () => {
+    const { deps, log, fire } = signals();
+    const exec: Exec = async () => ({ code: 0, stdout: '', stderr: '' });
+    const generate = vi.fn();
+    const { calls, ui } = recordingUi();
+    const firing: Ui = {
+      ...ui,
+      intro: () => {
+        ui.intro();
+        fire();
+      },
+    };
+    const settled = pending(
+      main(['my-tools', '-y'], {
+        cwd,
+        ui: firing,
+        exec,
+        interruptDeps: deps,
+        runDeps: { exec, generate },
+      })
+    );
+    await vi.waitFor(() => expect(log).toContain('exit 130'));
+    await new Promise((done) => setTimeout(done, 20));
+    expect(generate).not.toHaveBeenCalled();
+    expect(calls).toEqual(['intro', 'stop', 'fail: Cancelled. Nothing was written.']);
+    expect(settled()).toBe(false);
+  });
+
+  it("does nothing while run() runs: run's own handler owns the signal", async () => {
+    const { deps, log, fire } = signals();
+    const template = join(cwd, 'template');
+    mkdirSync(template);
+    writeFileSync(join(template, 'package.json'), '{ "packageManager": "pnpm@12.15.0" }\n');
+    writeFileSync(join(template, 'pnpm-lock.yaml'), LOCKFILE);
+    const exec: Exec = async (cmd, args) =>
+      cmd === 'pnpm' && args[0] === '--version'
+        ? { code: 0, stdout: '12.15.0\n', stderr: '' }
+        : { code: 0, stdout: '', stderr: '' };
+    const runDeps: RunDeps = {
+      templateDir: template,
+      exec,
+      onInterrupt: () => () => undefined,
+      generate: async (input) => {
+        fire();
+        await mkdir(input.to);
+        await writeFile(join(input.to, 'package.json'), '{}\n');
+        await writeFile(join(input.to, 'pnpm-lock.yaml'), LOCKFILE);
+      },
+    };
+    const { calls, ui } = recordingUi();
+    const code = await main(['my-tools', '-y', '--no-git'], {
+      cwd,
+      ui,
+      exec,
+      interruptDeps: deps,
+      runDeps,
+    });
+    expect(code).toBe(0);
+    expect(log).toEqual([]);
+    expect(calls.join('\n')).not.toContain('Cancelled');
+  });
+
+  it('after the outcome is printed, a signal only keeps its exit code', async () => {
+    const { deps, log, fire, handlers } = signals();
+    const exec: Exec = async () => ({ code: 0, stdout: '9.15.9\n', stderr: '' });
+    const { calls, ui } = recordingUi();
+    const code = await main(['--check'], { cwd, ui, exec, interruptDeps: deps });
+    expect(code).toBe(TOOLCHAIN);
+    const printed = [...calls];
+    // The command-level handler and the exit-code one; only the second still acts.
+    expect(handlers).toHaveLength(2);
+    fire();
+    await new Promise((done) => setTimeout(done, 20));
+    expect(process.exitCode).toBe(TOOLCHAIN);
+    expect(log).toEqual([]);
+    expect(calls).toEqual(printed);
   });
 });

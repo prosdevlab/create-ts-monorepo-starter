@@ -228,15 +228,19 @@ const fileExists: Exists = (path) =>
 /**
  * Runs `pnpm --version` in an empty folder pinned to `spec` (`pnpm@12.15.0`), where pnpm switches
  * itself to that version as the install will. Throws a ToolchainError when the switch fails.
+ * `onDir` gets that folder as soon as it exists, so an interrupt handler can remove it: an
+ * interrupted pnpm never returns, and then this function never gets to.
  */
 export async function checkSwitch(
   spec: string,
   found: string,
   exec: Exec = defaultExec,
   root: string = tmpdir(),
-  exists: Exists = fileExists
+  exists: Exists = fileExists,
+  onDir: (dir: string) => void = () => undefined
 ): Promise<void> {
   const dir = await mkdtemp(join(root, 'ctms-pnpm-'));
+  onDir(dir);
   try {
     await writeFile(join(dir, 'package.json'), `${JSON.stringify({ packageManager: spec })}\n`);
     const result = await exec('pnpm', ['--version'], { cwd: dir }).catch(() => null);

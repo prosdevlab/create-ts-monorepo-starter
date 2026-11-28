@@ -1,13 +1,14 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rm as rmPromise, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Outcome } from '../src/outcome';
 import type { Exec, ToolchainError } from '../src/pnpm';
+import { retryStep } from '../src/retry';
 import { leftBehind, leftOf, planFromOptions, type RunDeps, type RunPlan, run } from '../src/run';
 import type { Ui } from '../src/ui';
-import { backUp, moveIntoPlace, type Probe } from '../src/workspace';
+import { backUp, moveIntoPlace, onInterrupt, type Probe } from '../src/workspace';
 
 const LOCKFILE = `lockfileVersion: '9.0'
 
@@ -1176,5 +1177,68 @@ describe('what the run left behind', () => {
         expect(ui.calls.at(-1)).toMatch(/^fail: Cancelled\. Your files are in /);
       });
     });
+  });
+});
+
+describe('on Ctrl-C while pnpm switches, with the real handler', () => {
+  const isScratch = (path: string) => basename(path).startsWith('ctms-pnpm-');
+  /** Fires the signal from inside `checkSwitch`'s `pnpm --version`; the stopped pnpm exits 1. */
+  const ctrlC = async (removeFails: (path: string) => boolean = () => false) => {
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    let fire: () => void = () => undefined;
+    let dir = '';
+    const removed: string[] = [];
+    const outcomes: Outcome[] = [];
+    const exec = fakeExec({
+      'pnpm --version': async (cwd) => {
+        if (!isScratch(cwd)) return { code: 0, stdout: '12.15.0\n' };
+        dir = cwd;
+        fire();
+        return { code: 1 };
+      },
+    });
+    const runDeps = deps({
+      exec,
+      onInterrupt,
+      interruptDeps: {
+        on: (handler) => {
+          fire = handler;
+          return () => undefined;
+        },
+        live: () => true,
+        stop: async () => true,
+        remove: (path) => {
+          removed.push(path);
+          if (removeFails(path)) throw new Error('EBUSY');
+          rmSync(path, { recursive: true, force: true });
+        },
+      },
+      onOutcome: (outcome) => outcomes.push(outcome),
+    });
+    void run(plan(), recordingUi(), runDeps);
+    await vi.waitFor(() => expect(outcomes).toHaveLength(1));
+    const [outcome] = outcomes as [Outcome];
+    return { dir, removed, outcome };
+  };
+
+  it('removes the folder checkSwitch made, and offers the retry', async () => {
+    const { dir, removed, outcome } = await ctrlC();
+    expect(removed).toContain(dir);
+    expect(existsSync(dir)).toBe(false);
+    expect(outcome).toMatchObject({ ok: false, error: { code: 'interrupted' } });
+    expect(outcome.ok ? undefined : outcome.left).toEqual({ target: 'missing' });
+    expect(retryStep(outcome, plan(), root)).toBeDefined();
+    expect(process.exit).toHaveBeenCalledWith(130);
+  });
+
+  it("ignores that folder when it can't be removed: no left.temp, and the retry stays", async () => {
+    const { dir, removed, outcome } = await ctrlC(isScratch);
+    try {
+      expect(removed).toContain(dir);
+      expect(outcome.ok ? undefined : outcome.left).toEqual({ target: 'missing' });
+      expect(retryStep(outcome, plan(), root)).toBeDefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

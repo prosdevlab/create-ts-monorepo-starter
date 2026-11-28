@@ -33,6 +33,7 @@ import {
   backUp,
   backupPath,
   holdsCwd,
+  type InterruptDeps,
   type InterruptOutcome,
   moveIntoPlace,
   onInterrupt,
@@ -81,6 +82,8 @@ export interface RunDeps {
   backUp?: typeof backUp;
   rm?: typeof rm;
   onInterrupt?: typeof onInterrupt;
+  /** Passed to `onInterrupt` (stop, remove, on, ...); `run` sets `onStart`, `exit` and `scratch`. */
+  interruptDeps?: InterruptDeps;
   /** The folder the user's shell stands in; a backup never renames it. */
   cwd?: string;
   /** A synchronous read of one path; `leftBehind` reads the disk through it. */
@@ -266,7 +269,11 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     warnings.push({ code, title, lines: shown, fixes });
     ui.warn(title, shown);
   };
+  // `checkSwitch`'s folder: an interrupt while pnpm switches leaves it for the handler to remove.
+  const scratch: string[] = [];
   const unregister = (deps.onInterrupt ?? onInterrupt)(temp, {
+    ...deps.interruptDeps,
+    scratch: () => scratch,
     onStart: () => {
       interrupted = true;
     },
@@ -315,7 +322,9 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     const pin = spec.slice('pnpm@'.length);
     const pnpm = await detectPnpm(exec);
     if (pnpm.kind === 'old') throw tooOld(pnpm.version, spec);
-    if (pnpm.kind === 'ok') await checkSwitch(spec, pnpm.version, exec);
+    if (pnpm.kind === 'ok') {
+      await checkSwitch(spec, pnpm.version, exec, undefined, undefined, (dir) => scratch.push(dir));
+    }
 
     await (deps.generate ?? generate)({
       from,

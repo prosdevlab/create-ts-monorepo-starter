@@ -4,13 +4,14 @@ import { EXAMPLES, type Options, parseArgv } from './args.js';
 import { gitIdentity } from './git.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
 import { exitCode, FAILURE, type Left, type Outcome, type Problem, TOOLCHAIN } from './outcome.js';
-import { checkSwitch, detectPnpm, type Exec, ToolchainError, tooOld } from './pnpm.js';
+import { checkSwitch, defaultExec, detectPnpm, type Exec, ToolchainError, tooOld } from './pnpm.js';
 import { failureFrom, renderText, usageFailure } from './report.js';
 import { retryStep } from './retry.js';
 import { leftOf, leftoverLine, planFromOptions, type RunDeps, type RunPlan, run } from './run.js';
 import { pnpmSpec } from './template.js';
 import {
   type Ask,
+  CANCELLED,
   clackUi,
   createAsk,
   helpText,
@@ -19,7 +20,13 @@ import {
   type Ui,
   versionText,
 } from './ui.js';
-import { backupPath, targetState } from './workspace.js';
+import {
+  backupPath,
+  type InterruptDeps,
+  onInterrupt,
+  onSignals,
+  targetState,
+} from './workspace.js';
 
 export { FAILURE, TOOLCHAIN };
 
@@ -96,10 +103,12 @@ export interface MainIo {
   exec?: Exec;
   /** Passed to `run`. */
   runDeps?: RunDeps;
+  /** Passed to the command-level interrupt handler (stop, remove, on, exit, ...). */
+  interruptDeps?: InterruptDeps;
 }
 
 /** `--check`: is this machine's pnpm ready for the template's? Creates nothing. */
-async function check(ui: Ui, exec: Exec | undefined): Promise<Outcome> {
+async function check(ui: Ui, exec: Exec, onDir: (dir: string) => void): Promise<Outcome> {
   const spec = pnpmSpec();
   ui.intro();
   const pnpm = await detectPnpm(exec);
@@ -118,7 +127,7 @@ async function check(ui: Ui, exec: Exec | undefined): Promise<Outcome> {
   }
   if (pnpm.kind === 'old') return { ok: false, error: failureFrom(tooOld(pnpm.version, spec)) };
   try {
-    await checkSwitch(spec, pnpm.version, exec);
+    await checkSwitch(spec, pnpm.version, exec, undefined, undefined, onDir);
   } catch (error) {
     if (!(error instanceof ToolchainError)) throw error;
     return { ok: false, error: failureFrom(error) };
@@ -142,15 +151,112 @@ const isInteractive = (options: Options, io: MainIo) =>
 const chooseUi = (options: Options, io: MainIo): Ui =>
   io.ui ?? (!options.check && isInteractive(options, io) ? clackUi() : plainUi());
 
+const never = new Promise<never>(() => undefined);
+
+/** The command-level interrupt: what `execute` checks, and the exec it runs commands with. */
+interface Guard {
+  /** Runs a command; once a signal arrives it never settles, so the command can't carry on. */
+  exec: Exec;
+  /** Records `checkSwitch`'s folder, for the handler to remove. */
+  onDir: (dir: string) => void;
+  interrupted: () => boolean;
+  /** Runs `run()`: its own handler owns a signal until it settles. */
+  during: <T>(work: () => Promise<T>) => Promise<T>;
+  /** The outcome is final: from now on a signal only keeps its exit code. */
+  settle: (outcome: Outcome) => void;
+}
+
+/**
+ * Handles SIGINT, SIGTERM and SIGHUP for the whole command: `--check`, and everything before and
+ * after `run()`. A signal stops pnpm and its children, removes `checkSwitch`'s folder, prints
+ * `Cancelled. Nothing was written.` and exits 130. While `run()` runs, its own handler does that
+ * and this one does nothing. Once the outcome is final, a signal only sets its exit code, so a
+ * Ctrl-C while the output drains can't change how the command ended. The handlers stay registered
+ * until the process exits: a signal listener doesn't keep the process alive.
+ */
+function guard(ui: Ui, io: MainIo): Guard {
+  let interrupted = false;
+  let running = false;
+  let code: number | undefined;
+  const dirs: string[] = [];
+  const base = io.exec ?? defaultExec;
+  const deps = io.interruptDeps ?? {};
+  const on = deps.on ?? onSignals;
+  const exit = deps.exit ?? ((status: number) => process.exit(status));
+  onInterrupt(undefined, {
+    ...deps,
+    on,
+    active: () => !running && code === undefined,
+    scratch: () => dirs,
+    onStart: () => {
+      interrupted = true;
+    },
+    exit: (status, outcome) => {
+      try {
+        ui.stop();
+        renderText(
+          { ok: false, error: { code: 'interrupted', title: CANCELLED, lines: [], fixes: [] } },
+          ui
+        );
+      } catch {
+      } finally {
+        exit(status, outcome);
+      }
+    },
+  });
+  on(() => {
+    if (code !== undefined) process.exitCode = code;
+  });
+  return {
+    // Not async: a command that throws synchronously still throws, as it would unwrapped.
+    exec: (cmd, args, opts) => {
+      if (interrupted) return never;
+      return base(cmd, args, opts).then(
+        (result) => (interrupted ? never : result),
+        (error: unknown) => (interrupted ? never : Promise.reject(error))
+      );
+    },
+    onDir: (dir) => {
+      dirs.push(dir);
+    },
+    interrupted: () => interrupted,
+    during: async (work) => {
+      if (interrupted) return never;
+      running = true;
+      try {
+        return await work();
+      } finally {
+        running = false;
+      }
+    },
+    settle: (outcome) => {
+      code = exitCode(outcome);
+    },
+  };
+}
+
 /**
  * Runs the command and returns how it ended, without printing the result (progress goes to the Ui).
- * `--help` and `--version` are `main`'s: they print text and aren't an outcome.
+ * `--help` and `--version` are `main`'s: they print text and aren't an outcome. After a signal the
+ * interrupt handler prints and exits, and this never resolves.
  */
 export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome> {
   const parsed = parseArgv(argv);
   if (!parsed.ok) return usageFailure(parsed.message);
   const { options } = parsed;
-  if (options.check) return check(chooseUi(options, io), io.exec).catch(failed);
+  const ui = chooseUi(options, io);
+  const g = guard(ui, io);
+  // Invariant: no `await` that waits on I/O between `run()` settling and this point, nor between
+  // here and `main` printing. A signal is handled only between event-loop turns, so none can be
+  // handled after the outcome is decided and before `settle` makes the handler keep its code.
+  const outcome = await command(options, { ...io, ui }, g);
+  if (g.interrupted()) return never;
+  g.settle(outcome);
+  return outcome;
+}
+
+async function command(options: Options, io: MainIo & { ui: Ui }, g: Guard): Promise<Outcome> {
+  if (options.check) return check(io.ui, g.exec, g.onDir).catch(failed);
   const cwd = io.cwd ?? process.cwd();
   const interactive = isInteractive(options, io);
   // A bad flag fails at once, before any question.
@@ -163,7 +269,7 @@ export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome>
   const now = new Date();
   let holder: string | undefined;
   try {
-    holder = (await gitIdentity(cwd, io.exec)).name;
+    holder = (await gitIdentity(cwd, g.exec)).name;
   } catch (error) {
     return failed(error);
   }
@@ -181,7 +287,7 @@ export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome>
     }
   }
 
-  const ui = chooseUi(options, io);
+  const { ui } = io;
   ui.intro();
   try {
     if (plan && (await targetState(plan.target)) === 'not-empty') {
@@ -202,7 +308,7 @@ export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome>
       renderText(reported, ui);
       return reported;
     };
-    const result = await run(plan, ui, { report, ...io.runDeps });
+    const result = await g.during(() => run(resolved, ui, { report, ...io.runDeps }));
     const left: Left = { target: 'complete', ...(result.backup && { backup: result.backup }) };
     return { ok: true, kind: 'created', plan, result, warnings: result.warnings, left };
   } catch (error) {
