@@ -661,13 +661,13 @@ describe('run', () => {
       );
     });
 
-    it('still exits 130 when the Ui throws', async () => {
+    it('still exits 130 when the Ui throws, and the error stays in the handler', async () => {
       const ui = recordingUi();
       ui.fail = () => {
         throw new Error('write EPIPE');
       };
       const generate: RunDeps['generate'] = async () => {
-        expect(() => interrupt?.(130, CLEAN)).toThrow('EPIPE');
+        expect(() => interrupt?.(130, CLEAN)).not.toThrow();
         throw new Error('stop here');
       };
       await expect(run(plan(), ui, catching({ generate }))).rejects.toThrow('stop here');
@@ -1060,6 +1060,36 @@ describe('what the run left behind', () => {
       expect(found).toEqual({ target: 'unchanged' });
       expect(existsSync(backupDir())).toBe(false);
       expect(readdirSync(target()).sort()).toEqual(['a.txt', 'b.txt']);
+    });
+
+    it('in place, with a report that throws: still exits 130 and removes the empty backup folder', async () => {
+      nonEmpty('a.txt', 'b.txt');
+      const report = () => {
+        throw new Error('write EPIPE');
+      };
+      void run(
+        plan({ replace: true }),
+        recordingUi(),
+        catching({ cwd: target(), backUp: backUpWith(hang()), report })
+      );
+      await vi.waitFor(() => expect(outcomes).toHaveLength(1));
+      expect(process.exit).toHaveBeenCalledWith(130);
+      expect(existsSync(backupDir())).toBe(false);
+      expect(readdirSync(target()).sort()).toEqual(['a.txt', 'b.txt']);
+    });
+
+    it('gives onOutcome what report returned', async () => {
+      const retry = { argv: ['-y', '--', 'my-tools'], cwd: root };
+      const ui = recordingUi();
+      const report = (outcome: Outcome): Outcome => (outcome.ok ? outcome : { ...outcome, retry });
+      const generate: RunDeps['generate'] = async () => {
+        interrupt?.(130, CLEAN);
+        throw new Error('stop here');
+      };
+      await expect(run(plan(), ui, catching({ generate, report }))).rejects.toThrow('stop here');
+      expect(outcomes[0]).toMatchObject({ error: { code: 'interrupted' }, retry });
+      // The default text print was replaced, not added to.
+      expect(ui.calls.some((call) => call.startsWith('fail:'))).toBe(false);
     });
 
     it('in place, after one entry moved: split, and the backup folder and its entry stay', async () => {

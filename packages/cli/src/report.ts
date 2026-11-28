@@ -1,6 +1,12 @@
 import { CliError, codeOf, type Failure, type Outcome } from './outcome.js';
 import { pnpmSpec } from './template.js';
-import { CANCELLED, CancelledError, type Ui } from './ui.js';
+import { CANCELLED, CancelledError, shellQuote, type Ui } from './ui.js';
+
+/** An argument as a shell reads it: `@scope` and `lib,cli` need no quotes; anything else goes to `shellQuote`. */
+const quoteArg = (arg: string) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : shellQuote(arg));
+
+/** The failures whose text gains a retry line; the pnpm ones already say "run this command again". */
+const RETRY_LINE: ReadonlySet<string> = new Set(['install-failed', 'interrupted']);
 
 /** The failure for an error: the text `report()` printed before, and the code. */
 export function failureFrom(error: unknown): Failure {
@@ -34,8 +40,13 @@ export function usageFailure(message: string): Outcome {
 export function renderText(outcome: Outcome, ui: Ui): void {
   if (!outcome.ok) {
     const { code, title, lines } = outcome.error;
-    if (code === 'usage') process.stderr.write(`${[title, ...lines].join('\n')}\n`);
-    else ui.fail(title, lines);
+    if (code === 'usage') {
+      process.stderr.write(`${[title, ...lines].join('\n')}\n`);
+      return;
+    }
+    const retry = outcome.retry && RETRY_LINE.has(code) ? outcome.retry : undefined;
+    const command = retry && ['create-ts-monorepo-starter', ...retry.argv.map(quoteArg)];
+    ui.fail(title, command ? [...lines, `Retry: ${command.join(' ')}`] : lines);
     return;
   }
   if (outcome.kind === 'created') {

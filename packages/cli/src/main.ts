@@ -6,12 +6,11 @@ import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from '
 import { exitCode, FAILURE, type Left, type Outcome, type Problem, TOOLCHAIN } from './outcome.js';
 import { checkSwitch, detectPnpm, type Exec, ToolchainError, tooOld } from './pnpm.js';
 import { failureFrom, renderText, usageFailure } from './report.js';
+import { retryStep } from './retry.js';
 import { leftOf, leftoverLine, planFromOptions, type RunDeps, type RunPlan, run } from './run.js';
 import { pnpmSpec } from './template.js';
 import {
   type Ask,
-  CANCELLED,
-  CancelledError,
   clackUi,
   createAsk,
   helpText,
@@ -127,6 +126,12 @@ async function check(ui: Ui, exec: Exec | undefined): Promise<Outcome> {
   return { ok: true, kind: 'checked', pnpm, warnings: [] };
 }
 
+/** The outcome with its retry, when retrying is safe. */
+function withRetry(outcome: Outcome, plan: RunPlan | undefined, cwd: string): Outcome {
+  const retry = retryStep(outcome, plan, cwd);
+  return retry && !outcome.ok ? { ...outcome, retry } : outcome;
+}
+
 /** An error the command didn't expect, as a failure: it prints `✗ <message>` and exits 1. */
 const failed = (error: unknown): Outcome => ({ ok: false, error: failureFrom(error) });
 
@@ -187,7 +192,17 @@ export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome>
       plan.replace = true;
     }
     plan ??= await askPlan(createAsk(io.prompts), cwd, options, now, holder);
-    const result = await run(plan, ui, io.runDeps);
+    const resolved = plan;
+    // The interrupt handler prints through this, so an interrupt gets the same retry as a failure.
+    const report = (outcome: Outcome): Outcome => {
+      let reported = outcome;
+      try {
+        reported = withRetry(outcome, resolved, cwd);
+      } catch {}
+      renderText(reported, ui);
+      return reported;
+    };
+    const result = await run(plan, ui, { report, ...io.runDeps });
     const left: Left = { target: 'complete', ...(result.backup && { backup: result.backup }) };
     return { ok: true, kind: 'created', plan, result, warnings: result.warnings, left };
   } catch (error) {
@@ -195,7 +210,7 @@ export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome>
     const failure = failureFrom(error);
     // The interrupt path says this too; a failure would otherwise leave the folder unmentioned.
     if (left?.temp) failure.lines = [...failure.lines, leftoverLine(left.temp)];
-    return { ok: false, error: failure, ...(left && { left }) };
+    return withRetry({ ok: false, error: failure, ...(left && { left }) }, plan, cwd);
   }
 }
 

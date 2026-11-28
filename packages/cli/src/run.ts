@@ -85,8 +85,13 @@ export interface RunDeps {
   cwd?: string;
   /** A synchronous read of one path; `leftBehind` reads the disk through it. */
   probe?: (path: string) => Probe;
-  /** Called with the interrupted outcome, after its message is printed and before the process exits. */
+  /** Called with the interrupted outcome `report` printed, before the process exits. */
   onOutcome?: (outcome: Outcome) => void;
+  /**
+   * Prints the interrupted outcome before the process exits, and returns what it printed. `main`
+   * passes its own, which adds the retry; the default prints the text.
+   */
+  report?: (outcome: Outcome) => Outcome;
 }
 
 /** A failure with the output lines that explain it. */
@@ -284,9 +289,13 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
           error: { code: 'interrupted', title, lines, fixes: [] },
           left,
         };
-        renderText(interrupted, ui);
+        let reported: Outcome = interrupted;
         try {
-          deps.onOutcome?.(interrupted);
+          if (deps.report) reported = deps.report(interrupted);
+          else renderText(interrupted, ui);
+        } catch {}
+        try {
+          deps.onOutcome?.(reported);
         } catch {}
         // Only an empty folder this run created: rmdir can't remove one with files in it.
         try {

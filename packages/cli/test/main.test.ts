@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { CANCEL_SYMBOL } from '@clack/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execute, main, TOOLCHAIN } from '../src/main';
-import { exitCode } from '../src/outcome';
+import { exitCode, type Outcome } from '../src/outcome';
 import type { Exec } from '../src/pnpm';
 import type { RunDeps } from '../src/run';
 import { pnpmSpec } from '../src/template';
@@ -447,7 +447,7 @@ packages:
       'step: Created my-tools | @my-tools/lib, @my-tools/shared, @my-tools/cli, @my-tools/web',
       'start: Installing dependencies with pnpm 12.15.0',
       'stop',
-      "fail: Couldn't install dependencies (pnpm exited with 1) | ERR_PNPM_FETCH | network down",
+      "fail: Couldn't install dependencies (pnpm exited with 1) | ERR_PNPM_FETCH | network down | Retry: create-ts-monorepo-starter -y --scope @my-tools --examples lib,cli,web --no-git -- my-tools",
     ]);
     expect(readdirSync(cwd).filter((name) => name.includes('.tmp-'))).toEqual([]);
   });
@@ -467,6 +467,69 @@ packages:
     const outcome = await execute(argv, { cwd, ui, runDeps: deps });
     return { calls, outcome };
   };
+
+  describe('on Ctrl-C', () => {
+    type Exit = (code: number, outcome: { removed: boolean; stopped: boolean }) => void;
+    /** A run whose `generate` fires the interrupt and never returns, as a real exit would leave it. */
+    const interrupted = async (outcome: { removed: boolean; stopped: boolean }) => {
+      vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      let exit: Exit | undefined;
+      const reported: Outcome[] = [];
+      const deps = runDeps({
+        onInterrupt: (_temp, options) => {
+          exit = options?.exit;
+          return () => undefined;
+        },
+        onOutcome: (o) => reported.push(o),
+        generate: () => {
+          exit?.(130, outcome);
+          return new Promise<never>(() => undefined);
+        },
+      });
+      const { calls, ui } = recordingUi();
+      void main(['my-tools', '-y', '--no-git'], { cwd, ui, runDeps: deps });
+      await vi.waitFor(() => expect(reported).toHaveLength(1));
+      return { calls, outcome: reported[0] };
+    };
+
+    it("reports through execute's report: the retry, in the outcome and the text", async () => {
+      const { calls, outcome } = await interrupted({ removed: true, stopped: true });
+      expect(outcome).toMatchObject({
+        ok: false,
+        error: { code: 'interrupted' },
+        left: { target: 'missing' },
+        retry: {
+          argv: [
+            '-y',
+            '--scope',
+            '@my-tools',
+            '--examples',
+            'lib,cli,web',
+            '--no-git',
+            '--',
+            'my-tools',
+          ],
+          cwd,
+        },
+      });
+      expect(calls.filter((call) => call.startsWith('fail:'))).toEqual([
+        'fail: Cancelled. Nothing was written. | Retry: create-ts-monorepo-starter -y --scope @my-tools --examples lib,cli,web --no-git -- my-tools',
+      ]);
+      expect(process.exit).toHaveBeenCalledWith(130);
+    });
+
+    it('offers no retry when the temporary folder stayed or pnpm may still run', async () => {
+      for (const state of [
+        { removed: false, stopped: true },
+        { removed: true, stopped: false },
+      ]) {
+        const { calls, outcome } = await interrupted(state);
+        expect(outcome).not.toHaveProperty('retry');
+        expect(calls.join('\n')).not.toContain('Retry:');
+        vi.restoreAllMocks();
+      }
+    });
+  });
 
   it('removes credentials from a failed install, in the text and in error.output', async () => {
     const stderr =
@@ -490,7 +553,7 @@ packages:
     const exec$ = exec({ 'pnpm install': { code: 1, stderr: '_authToken=abc123' } });
     const { calls } = await go(runDeps({ exec: exec$ }));
     expect(calls.at(-1)).toBe(
-      "fail: Couldn't install dependencies (pnpm exited with 1) | _authToken=***"
+      "fail: Couldn't install dependencies (pnpm exited with 1) | _authToken=*** | Retry: create-ts-monorepo-starter -y --scope @my-tools --examples lib,cli,web --no-git -- my-tools"
     );
   });
 

@@ -3,7 +3,7 @@ import type { Outcome } from '../src/outcome';
 import { tooOld } from '../src/pnpm';
 import { failureFrom, renderText, usageFailure } from '../src/report';
 import { pnpmSpec } from '../src/template';
-import { CancelledError, type Ui } from '../src/ui';
+import { CancelledError, shellQuote, type Ui } from '../src/ui';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -61,6 +61,35 @@ describe('renderText', () => {
     const { calls, ui } = recording();
     renderText({ ok: false, error: failureFrom(new Error('x\ny')) }, ui);
     expect(calls).toEqual(['fail: x | y']);
+  });
+
+  it('ends a failed install or an interrupt with the retry, quoting only what needs it', () => {
+    const retry = {
+      argv: ['-y', '--scope', '@a', '--examples', 'lib,cli', '--', 'my tools'],
+      cwd: '/w',
+    };
+    for (const code of ['install-failed', 'interrupted'] as const) {
+      const { calls, ui } = recording();
+      renderText({ ok: false, error: { code, title: 'T', lines: ['l'], fixes: [] }, retry }, ui);
+      expect(calls).toEqual([
+        `fail: T | l | Retry: create-ts-monorepo-starter -y --scope @a --examples lib,cli -- ${shellQuote('my tools')}`,
+      ]);
+    }
+  });
+
+  it('adds no retry line without a retry, or for the pnpm failures that already say how', () => {
+    const retry = { argv: ['-y', '--', 'x'], cwd: '/w' };
+    const none = recording();
+    renderText(
+      { ok: false, error: { code: 'install-failed', title: 'T', lines: [], fixes: [] } },
+      none.ui
+    );
+    expect(none.calls).toEqual(['fail: T']);
+    for (const code of ['pnpm-too-old', 'pnpm-switch-failed'] as const) {
+      const { calls, ui } = recording();
+      renderText({ ok: false, error: { code, title: 'T', lines: [], fixes: [] }, retry }, ui);
+      expect(calls).toEqual(['fail: T']);
+    }
   });
 
   it('shows --check results', () => {

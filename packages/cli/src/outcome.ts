@@ -116,6 +116,12 @@ export type Fix =
   | { argv: string[]; scope: 'project' | 'user' | 'system' }
   | { see: string; scope: 'project' | 'user' | 'system' };
 
+/** A command to run: its arguments, and the folder to run it in (absolute). */
+export interface Step {
+  argv: string[];
+  cwd: string;
+}
+
 /** A problem a run finished with anyway (a warning), with a code and any fixes. */
 export interface Problem {
   code: string;
@@ -138,4 +144,4 @@ export interface Failure {
 export type Outcome =
   | { ok: true; kind: 'created'; plan: RunPlan; result: RunResult; warnings: Problem[]; left: Left }
   | { ok: true; kind: 'checked'; pnpm: PnpmStatus; warnings: Problem[] }
-  | { ok: false; error: Failure; left?: Left; retry?: string[] };
+  | { ok: false; error: Failure; left?: Left; retry?: Step };
