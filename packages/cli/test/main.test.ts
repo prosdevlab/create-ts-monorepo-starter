@@ -3,23 +3,37 @@ import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { CANCEL_SYMBOL } from '@clack/prompts';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { execute, main, TOOLCHAIN } from '../src/main';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execute, HINT, type MainIo, main, TOOLCHAIN } from '../src/main';
 import { exitCode, type Outcome } from '../src/outcome';
 import type { Exec } from '../src/pnpm';
 import type { RunDeps } from '../src/run';
 import { pnpmSpec } from '../src/template';
-import type { Prompts, Ui } from '../src/ui';
+import { helpText, type Prompts, type Ui } from '../src/ui';
 import { backUp, type InterruptDeps, moveIntoPlace } from '../src/workspace';
 
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+// Each `main` registers its signal handlers for the life of the process, and a test that calls it
+// in a loop passes Node's default limit of 10; afterEach removes them.
+let maxListeners: number;
+beforeAll(() => {
+  maxListeners = process.getMaxListeners();
+  process.setMaxListeners(100);
+});
+afterAll(() => {
+  process.setMaxListeners(maxListeners);
+});
 let cwd: string;
 let listening: ((...args: never) => unknown)[][];
 let exitCodeBefore: typeof process.exitCode;
+let ttyBefore: PropertyDescriptor | undefined;
 beforeEach(() => {
   cwd = mkdtempSync(join(tmpdir(), 'ctms-main-'));
   listening = SIGNALS.map((signal) => process.listeners(signal));
   exitCodeBefore = process.exitCode;
+  // Stdout as a terminal, so no run prints the --json hint; the hint's own tests pass `stdoutIsTTY`.
+  ttyBefore = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+  Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
 });
 afterEach(() => {
   rmSync(cwd, { recursive: true, force: true });
@@ -31,6 +45,8 @@ afterEach(() => {
     }
   });
   process.exitCode = exitCodeBefore;
+  if (ttyBefore) Object.defineProperty(process.stdout, 'isTTY', ttyBefore);
+  else delete (process.stdout as { isTTY?: boolean }).isTTY;
 });
 
 /** The command-level handler's seams: `fire` runs every handler registered, as a signal would. */
@@ -768,6 +784,336 @@ packages:
     expect(removed[0]).toMatch(/\.my-tools\.tmp-[0-9a-f]{8}$/);
   });
 
+  describe('--json, through main', () => {
+    /** Empties the test folder but keeps the template, so a second run starts from the same disk. */
+    const reset = () => {
+      for (const entry of readdirSync(cwd)) {
+        if (entry !== 'template-src') rmSync(join(cwd, entry), { recursive: true, force: true });
+      }
+    };
+    type Case = { argv: string[]; deps?: () => RunDeps; setup?: () => void; io?: MainIo };
+    /**
+     * Runs a case without and then with `--json` from the same disk. Checks that `--json` writes
+     * exactly one object, which parses, with the same exit code, `ok` true exactly for 0, and the
+     * text still shown on the Ui.
+     */
+    const both = async ({
+      argv,
+      deps = () => runDeps(),
+      setup = () => undefined,
+      io = {},
+    }: Case) => {
+      vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      setup();
+      const text = recordingUi();
+      const textCode = await main(argv, { cwd, ui: text.ui, runDeps: deps(), ...io });
+      reset();
+      setup();
+      const lines: string[] = [];
+      const { calls, ui } = recordingUi();
+      const code = await main([...argv, '--json'], {
+        cwd,
+        ui,
+        runDeps: deps(),
+        emit: (line) => lines.push(line),
+        ...io,
+      });
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/^\{.*\}\n$/s);
+      const object = JSON.parse(lines[0] ?? '');
+      expect(code).toBe(textCode);
+      expect(object.ok).toBe(code === 0);
+      expect(object.schemaVersion).toBe(1);
+      return { object, calls, code, textCalls: text.calls };
+    };
+
+    it('created, with the text on the Ui', async () => {
+      const { object, calls, textCalls } = await both({ argv: ['my-tools', '-y', '--no-git'] });
+      expect(object).toMatchObject({
+        kind: 'created',
+        project: { path: target, folder: 'my-tools', scope: '@my-tools' },
+        left: { target: 'complete' },
+      });
+      expect(calls).toEqual(textCalls);
+    });
+
+    it('created over a backup', async () => {
+      const { object } = await both({ argv: force, setup: nonEmptyTarget });
+      expect(object.left.backup).toMatch(/\.backup-/);
+    });
+
+    it('install-failed, with a retry that keeps --json', async () => {
+      const deps = () => runDeps({ exec: exec({ 'pnpm install': { code: 1, stderr: 'down' } }) });
+      const { object, code } = await both({ argv: ['my-tools', '-y', '--no-git'], deps });
+      expect(code).toBe(4);
+      expect(object).toMatchObject({
+        kind: 'failed',
+        error: { code: 'install-failed', output: ['down'] },
+        left: { target: 'missing' },
+        retry: {
+          argv: [
+            '-y',
+            '--scope',
+            '@my-tools',
+            '--examples',
+            'lib,cli,web',
+            '--no-git',
+            '--json',
+            '--',
+            'my-tools',
+          ],
+          cwd,
+        },
+      });
+    });
+
+    it('lockfile-changed, move-failed, backup-failed and unexpected', async () => {
+      const changed = `${LOCKFILE}\n  right-pad@2.0.0:\n    resolution: {integrity: sha512-y}\n`;
+      const move: RunDeps['moveIntoPlace'] = (temp, to) =>
+        moveIntoPlace(temp, to, { rename: failingOn(1) });
+      const inPlace: RunDeps['backUp'] = (t, now, d) =>
+        backUp(t, now, { ...d, rename: failingOn(1) });
+      const boom: RunDeps['generate'] = async () => {
+        throw new Error('boom');
+      };
+      const cases: [string, Case][] = [
+        [
+          'lockfile-changed',
+          { argv: ['my-tools', '-y'], deps: () => runDeps({ generate: generate(changed) }) },
+        ],
+        ['move-failed', { argv: ['my-tools', '-y'], deps: () => runDeps({ moveIntoPlace: move }) }],
+        [
+          'backup-failed',
+          { argv: force, setup: nonEmptyTarget, deps: () => runDeps({ backUp: inPlace }) },
+        ],
+        ['unexpected', { argv: ['my-tools', '-y'], deps: () => runDeps({ generate: boom }) }],
+      ];
+      for (const [code, c] of cases) {
+        const { object } = await both(c);
+        expect(object.error.code).toBe(code);
+        reset();
+        vi.restoreAllMocks();
+      }
+    });
+
+    it('target-not-empty, with no left', async () => {
+      const { object } = await both({ argv: ['my-tools', '-y'], setup: nonEmptyTarget });
+      expect(object.error.code).toBe('target-not-empty');
+      expect(object).not.toHaveProperty('left');
+    });
+
+    it('usage errors, the ones that parse and the ones that do not', async () => {
+      for (const argv of [['my-tools', '-y', '--scope', '@a b'], ['--shout'], ['-y']]) {
+        const { object, code } = await both({ argv });
+        expect(code).toBe(2);
+        expect(object.error.code).toBe('usage');
+        vi.restoreAllMocks();
+      }
+    });
+
+    it('--check, ready, without pnpm and too old', async () => {
+      const pnpm =
+        (stdout: string, code = 0): Exec =>
+        async () => ({ code, stdout, stderr: '' });
+      const ready = await both({ argv: ['--check'], io: { exec: pnpm('12.15.0\n') } });
+      expect(ready.object).toMatchObject({ kind: 'checked', pnpm: { found: '12.15.0' } });
+      vi.restoreAllMocks();
+      const none = await both({ argv: ['--check'], io: { exec: pnpm('', 127) } });
+      expect(none.object).toMatchObject({ kind: 'checked', pnpm: { found: null } });
+      expect(none.object.warnings[0].fixes).toEqual([
+        { argv: ['npm', 'install', '-g', 'pnpm'], scope: 'user' },
+      ]);
+      vi.restoreAllMocks();
+      const old = await both({ argv: ['--check'], io: { exec: pnpm('9.15.9\n') } });
+      expect(old.code).toBe(TOOLCHAIN);
+      expect(old.object.error).toMatchObject({
+        code: 'pnpm-too-old',
+        required: { pnpm: '>=10.26' },
+        found: { pnpm: '9.15.9' },
+      });
+    });
+
+    it('an error before the run, reading the git identity', async () => {
+      const exec$: Exec = (cmd) => {
+        if (cmd === 'git') throw new Error('git exploded');
+        return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+      };
+      const { object } = await both({ argv: ['my-tools', '-y'], io: { exec: exec$ } });
+      expect(object.error).toMatchObject({ code: 'unexpected', title: 'git exploded' });
+    });
+
+    it('--version prints an object, --help prints its text', async () => {
+      const { object } = await both({ argv: ['--version'] });
+      expect(object).toMatchObject({ ok: true, kind: 'version' });
+      vi.restoreAllMocks();
+      const lines: string[] = [];
+      const out: string[] = [];
+      vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+        out.push(String(chunk));
+        return true;
+      });
+      const code = await main(['--help', '--json'], { cwd, emit: (l) => lines.push(l) });
+      expect(code).toBe(0);
+      expect(lines).toEqual([]);
+      expect(out.join('')).toBe(`${helpText()}\n`);
+    });
+
+    it('with no Ui given, writes only the object to stdout and the text to stderr', async () => {
+      const out: string[] = [];
+      const err: string[] = [];
+      vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+        out.push(String(chunk));
+        return true;
+      });
+      vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+        err.push(String(chunk));
+        return true;
+      });
+      const lines: string[] = [];
+      const exec$: Exec = async () => ({ code: 0, stdout: '12.15.0\n', stderr: '' });
+      for (const argv of [
+        ['--check', '--json'],
+        ['--shout', '--json'],
+      ]) {
+        await main(argv, { cwd, exec: exec$, emit: (l) => lines.push(l) });
+      }
+      expect(out).toEqual([]);
+      expect(lines).toHaveLength(2);
+      expect(err.join('')).toMatch(/create-ts-monorepo-starter .*\n.*Ready: pnpm 12\.15\.0/);
+      expect(err.join('')).toContain('Unknown option --shout');
+    });
+
+    it('never prompts', async () => {
+      const throwing = {
+        text: async () => {
+          throw new Error('prompted');
+        },
+        confirm: async () => {
+          throw new Error('prompted');
+        },
+        multiselect: async () => {
+          throw new Error('prompted');
+        },
+      } as unknown as Prompts;
+      vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      const lines: string[] = [];
+      const emit = (l: string) => lines.push(l);
+      const { ui } = recordingUi();
+      const io = { cwd, ui, interactive: true, prompts: throwing, emit, runDeps: runDeps() };
+      expect(await main(['--json'], io)).toBe(2);
+      expect(JSON.parse(lines[0] ?? '')).toMatchObject({ error: { code: 'usage' } });
+      expect(await main(['my-tools', '--no-git', '--json'], io)).toBe(0);
+      expect(JSON.parse(lines[1] ?? '')).toMatchObject({ kind: 'created' });
+    });
+
+    it('touches the disk the same way with and without --json', async () => {
+      const run = async (json: boolean) => {
+        const commands: string[] = [];
+        const recording: Exec = (cmd, args, opts) => {
+          commands.push(folder(`${[cmd, ...args].join(' ')} in ${opts.cwd}`));
+          return exec()(cmd, args, opts);
+        };
+        const { ui } = recordingUi();
+        const argv = ['my-tools', '-y', ...(json ? ['--json'] : [])];
+        await main(argv, { cwd, ui, emit: () => undefined, runDeps: runDeps({ exec: recording }) });
+        const listing = readdirSync(cwd, { recursive: true }).map(String).sort();
+        reset();
+        return {
+          commands: commands.map((c) =>
+            c
+              .replace(/\.tmp-[0-9a-f]{8}/g, '.tmp-<hex>')
+              .replace(/ctms-pnpm-\w+/g, 'ctms-pnpm-<id>')
+          ),
+          listing,
+        };
+      };
+      const text = await run(false);
+      expect(await run(true)).toEqual(text);
+      expect(text.commands.length).toBeGreaterThan(3);
+    });
+
+    it('an interrupt during run() writes the object, with the retry, before it exits', async () => {
+      const order: string[] = [];
+      vi.spyOn(process, 'exit').mockImplementation(((code: number) => {
+        order.push(`exit ${code}`);
+      }) as never);
+      type Exit = (code: number, outcome: { removed: boolean; stopped: boolean }) => void;
+      let exit: Exit | undefined;
+      const deps = runDeps({
+        onInterrupt: (_temp, options) => {
+          exit = options?.exit;
+          return () => undefined;
+        },
+        generate: () => {
+          exit?.(130, { removed: true, stopped: true });
+          return new Promise<never>(() => undefined);
+        },
+      });
+      const { ui } = recordingUi();
+      void main(['my-tools', '-y', '--no-git', '--json'], {
+        cwd,
+        ui,
+        runDeps: deps,
+        emit: (line) => order.push(line),
+      });
+      await vi.waitFor(() => expect(order).toContain('exit 130'));
+      expect(order).toHaveLength(2);
+      expect(JSON.parse(order[0] ?? '')).toMatchObject({
+        ok: false,
+        error: { code: 'interrupted' },
+        left: { target: 'missing' },
+        retry: { argv: expect.arrayContaining(['--json']), cwd },
+      });
+      expect(order[1]).toBe('exit 130');
+    });
+  });
+
+  describe('the --json hint', () => {
+    const stderr = () => {
+      const err: string[] = [];
+      vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+        err.push(String(chunk));
+        return true;
+      });
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      return err;
+    };
+
+    it('is the first stderr line of a real run when stdout is not a terminal, once', async () => {
+      const err = stderr();
+      const { ui } = recordingUi();
+      // A failure, so something reaches stderr after the hint too.
+      const failing = runDeps({ exec: exec({ 'pnpm install': { code: 1 } }) });
+      const ran = (argv: string[]) => main(argv, { cwd, ui, stdoutIsTTY: false, runDeps: failing });
+      expect(await ran(['my-tools', '-y'])).toBe(4);
+      expect(err).toEqual([`${HINT}\n`]);
+      err.length = 0;
+      const exec$: Exec = async () => ({ code: 0, stdout: '12.15.0\n', stderr: '' });
+      await main(['--check'], { cwd, ui, stdoutIsTTY: false, exec: exec$ });
+      expect(err).toEqual([`${HINT}\n`]);
+    });
+
+    it('is not printed for a terminal, --json, --help, --version or a usage error', async () => {
+      const err = stderr();
+      const { ui } = recordingUi();
+      const exec$: Exec = async () => ({ code: 0, stdout: '12.15.0\n', stderr: '' });
+      await main(['--check'], { cwd, ui, stdoutIsTTY: true, exec: exec$ });
+      await main(['--check', '--json'], {
+        cwd,
+        ui,
+        stdoutIsTTY: false,
+        exec: exec$,
+        emit: () => undefined,
+      });
+      await main(['--help'], { cwd, ui, stdoutIsTTY: false });
+      await main(['--version'], { cwd, ui, stdoutIsTTY: false });
+      await main(['--shout'], { cwd, ui, stdoutIsTTY: false });
+      await main(['-y'], { cwd, ui, stdoutIsTTY: false, exec: exec$ });
+      expect(err.join('')).not.toContain(HINT);
+    });
+  });
+
   describe('execute: the code of every exit', () => {
     const outcomeOf = async (deps: RunDeps, argv = ['my-tools', '-y', '--no-git']) => {
       const { ui } = recordingUi();
@@ -902,6 +1248,32 @@ describe('the command-level interrupt', () => {
     expect(existsSync(dir)).toBe(false);
     expect(cancelled(calls)).toEqual(['fail: Cancelled. Nothing was written.']);
     expect(settled()).toBe(false);
+  });
+
+  it('under --json, writes one object, with no left, before it exits', async () => {
+    const { deps, log, fire } = signals();
+    const exec: Exec = async (_cmd, _args, { cwd: at }) => {
+      if (!isScratch(at)) return { code: 0, stdout: '10.28.0\n', stderr: '' };
+      fire();
+      return { code: 1, stdout: '', stderr: 'killed' };
+    };
+    const { ui } = recordingUi();
+    void main(['--check', '--json'], {
+      cwd,
+      ui,
+      exec,
+      interruptDeps: deps,
+      emit: (line) => log.push(line),
+    });
+    await vi.waitFor(() => expect(log).toContain('exit 130'));
+    await new Promise((done) => setTimeout(done, 20));
+    const lines = log.filter((entry) => entry.startsWith('{'));
+    expect(lines).toHaveLength(1);
+    const object = JSON.parse(lines[0] ?? '');
+    expect(object).toMatchObject({ ok: false, kind: 'failed', error: { code: 'interrupted' } });
+    expect(object).not.toHaveProperty('left');
+    expect(object).not.toHaveProperty('retry');
+    expect(log.indexOf(lines[0] ?? '')).toBeLessThan(log.indexOf('exit 130'));
   });
 
   it('while reading the git identity: the same, and run never starts', async () => {

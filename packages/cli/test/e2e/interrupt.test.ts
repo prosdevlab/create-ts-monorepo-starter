@@ -69,6 +69,49 @@ describe('interrupting and replacing', () => {
     120_000
   );
 
+  it.skipIf(process.platform === 'win32')(
+    'Ctrl-C during the install with --json writes one object that matches the disk',
+    async () => {
+      const child = spawn(process.execPath, [bin, 'p-json', '--json'], {
+        cwd: box.work,
+        env: box.env,
+        detached: true,
+      });
+      let stdout = '';
+      let stderr = '';
+      let sent = false;
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk;
+      });
+      // Under --json the progress is on stderr; stdout carries only the object.
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+        if (!sent && stderr.includes('Installing')) {
+          sent = true;
+          process.kill(-(child.pid as number), 'SIGINT');
+        }
+      });
+      const code = await new Promise<number | null>((done) => child.on('close', done));
+      await groupGone(child.pid as number);
+      await settle();
+      expect(sent, stderr).toBe(true);
+      expect(code).toBe(130);
+      expect(stdout.trimEnd().split('\n'), stdout).toHaveLength(1);
+      const object = JSON.parse(stdout);
+      expect(object).toMatchObject({
+        ok: false,
+        kind: 'failed',
+        error: { code: 'interrupted' },
+        left: { target: 'missing' },
+        retry: { argv: expect.arrayContaining(['--json', '--', 'p-json']) },
+      });
+      expect(object.left).not.toHaveProperty('temp');
+      expect(existsSync(join(box.work, 'p-json'))).toBe(false);
+      expect(leftovers('p-json')).toEqual([]);
+    },
+    120_000
+  );
+
   // How timeouts, `timeout` and process managers stop a program: a signal to its pid alone.
   it.skipIf(process.platform === 'win32')(
     'SIGTERM to the CLI alone during the install stops pnpm and leaves nothing',

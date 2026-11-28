@@ -1,7 +1,9 @@
 import { readdir } from 'node:fs/promises';
 import { basename } from 'node:path';
-import { EXAMPLES, type Options, parseArgv } from './args.js';
+import { EXAMPLES, type Options, parseArgv, wantsJson } from './args.js';
+import { writeAll } from './emit.js';
 import { gitIdentity } from './git.js';
+import { toJson, versionJson } from './json.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
 import { exitCode, FAILURE, type Left, type Outcome, type Problem, TOOLCHAIN } from './outcome.js';
 import { checkSwitch, defaultExec, detectPnpm, type Exec, ToolchainError, tooOld } from './pnpm.js';
@@ -105,6 +107,44 @@ export interface MainIo {
   runDeps?: RunDeps;
   /** Passed to the command-level interrupt handler (stop, remove, on, exit, ...). */
   interruptDeps?: InterruptDeps;
+  /** Writes the `--json` line (the object and its newline) to stdout; by default, synchronously. */
+  emit?: (line: string) => void;
+  /** Overrides whether stdout is a terminal, for the `--json` hint. */
+  stdoutIsTTY?: boolean;
+}
+
+/** Shows an outcome: the text on the Ui, and under `--json` the object on stdout. */
+function print(outcome: Outcome, ui: Ui, json: boolean, emit: MainIo['emit']): void {
+  renderText(outcome, ui);
+  if (json) (emit ?? writeAll)(`${JSON.stringify(toJson(outcome))}\n`);
+}
+
+export const HINT = 'add --json for machine-readable output';
+
+/**
+ * The Ui, with the hint as the first line on stderr the first time it shows anything: only a real
+ * run shows something there, so `--help`, `--version` and usage errors never print the hint.
+ */
+function withHint(ui: Ui): Ui {
+  let shown = false;
+  const first =
+    <A extends unknown[]>(show: (...args: A) => void) =>
+    (...args: A) => {
+      if (!shown) {
+        shown = true;
+        process.stderr.write(`${HINT}\n`);
+      }
+      show(...args);
+    };
+  return {
+    intro: first(() => ui.intro()),
+    step: first((done: string, detail?: string) => ui.step(done, detail)),
+    start: first((label: string) => ui.start(label)),
+    stop: () => ui.stop(),
+    warn: first((title: string, lines: string[]) => ui.warn(title, lines)),
+    fail: first((title: string, lines: string[]) => ui.fail(title, lines)),
+    outro: first((result, plan) => ui.outro(result, plan)),
+  };
 }
 
 /** `--check`: is this machine's pnpm ready for the template's? Creates nothing. */
@@ -136,20 +176,39 @@ async function check(ui: Ui, exec: Exec, onDir: (dir: string) => void): Promise<
 }
 
 /** The outcome with its retry, when retrying is safe. */
-function withRetry(outcome: Outcome, plan: RunPlan | undefined, cwd: string): Outcome {
-  const retry = retryStep(outcome, plan, cwd);
+function withRetry(
+  outcome: Outcome,
+  plan: RunPlan | undefined,
+  cwd: string,
+  json: boolean
+): Outcome {
+  const retry = retryStep(outcome, plan, cwd, json);
   return retry && !outcome.ok ? { ...outcome, retry } : outcome;
 }
 
 /** An error the command didn't expect, as a failure: it prints `✗ <message>` and exits 1. */
 const failed = (error: unknown): Outcome => ({ ok: false, error: failureFrom(error) });
 
+/** `--json` implies `-y`: it never asks. */
 const isInteractive = (options: Options, io: MainIo) =>
-  !options.yes && (io.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY));
+  !options.yes &&
+  !options.json &&
+  (io.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY));
 
-/** The Ui a run shows: `--check` and pipes get plain text, a terminal gets the clack screens. */
+/** Under `--json` all text goes to stderr: stdout carries only the object. */
+const stderrUi = () => plainUi({ out: process.stderr, err: process.stderr });
+
+/**
+ * The Ui a run shows: `--check` and pipes get plain text, a terminal gets the clack screens, and
+ * `--json` gets plain text on stderr.
+ */
 const chooseUi = (options: Options, io: MainIo): Ui =>
-  io.ui ?? (!options.check && isInteractive(options, io) ? clackUi() : plainUi());
+  io.ui ??
+  (options.json
+    ? stderrUi()
+    : !options.check && isInteractive(options, io)
+      ? clackUi()
+      : plainUi());
 
 const never = new Promise<never>(() => undefined);
 
@@ -174,7 +233,7 @@ interface Guard {
  * Ctrl-C while the output drains can't change how the command ended. The handlers stay registered
  * until the process exits: a signal listener doesn't keep the process alive.
  */
-function guard(ui: Ui, io: MainIo): Guard {
+function guard(ui: Ui, io: MainIo, report: (outcome: Outcome) => void): Guard {
   let interrupted = false;
   let running = false;
   let code: number | undefined;
@@ -194,10 +253,10 @@ function guard(ui: Ui, io: MainIo): Guard {
     exit: (status, outcome) => {
       try {
         ui.stop();
-        renderText(
-          { ok: false, error: { code: 'interrupted', title: CANCELLED, lines: [], fixes: [] } },
-          ui
-        );
+        report({
+          ok: false,
+          error: { code: 'interrupted', title: CANCELLED, lines: [], fixes: [] },
+        });
       } catch {
       } finally {
         exit(status, outcome);
@@ -245,7 +304,7 @@ export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome>
   if (!parsed.ok) return usageFailure(parsed.message);
   const { options } = parsed;
   const ui = chooseUi(options, io);
-  const g = guard(ui, io);
+  const g = guard(ui, io, (outcome) => print(outcome, ui, options.json, io.emit));
   // Invariant: no `await` that waits on I/O between `run()` settling and this point, nor between
   // here and `main` printing. A signal is handled only between event-loop turns, so none can be
   // handled after the outcome is decided and before `settle` makes the handler keep its code.
@@ -303,9 +362,9 @@ async function command(options: Options, io: MainIo & { ui: Ui }, g: Guard): Pro
     const report = (outcome: Outcome): Outcome => {
       let reported = outcome;
       try {
-        reported = withRetry(outcome, resolved, cwd);
+        reported = withRetry(outcome, resolved, cwd, options.json);
       } catch {}
-      renderText(reported, ui);
+      print(reported, ui, options.json, io.emit);
       return reported;
     };
     const result = await g.during(() => run(resolved, ui, { report, ...io.runDeps }));
@@ -316,23 +375,28 @@ async function command(options: Options, io: MainIo & { ui: Ui }, g: Guard): Pro
     const failure = failureFrom(error);
     // The interrupt path says this too; a failure would otherwise leave the folder unmentioned.
     if (left?.temp) failure.lines = [...failure.lines, leftoverLine(left.temp)];
-    return withRetry({ ok: false, error: failure, ...(left && { left }) }, plan, cwd);
+    return withRetry({ ok: false, error: failure, ...(left && { left }) }, plan, cwd, options.json);
   }
 }
 
 /** Runs the command, prints how it ended, and resolves with its exit code. */
 export async function main(argv: string[], io: MainIo = {}): Promise<number> {
+  const json = wantsJson(argv);
+  const emit = io.emit ?? writeAll;
   const parsed = parseArgv(argv);
+  // `--help` prints its text even with `--json`: rule 1's one exception.
   if (parsed.ok && parsed.options.help) {
     process.stdout.write(`${helpText()}\n`);
     return 0;
   }
   if (parsed.ok && parsed.options.version) {
-    process.stdout.write(`${versionText()}\n`);
+    if (json) emit(`${JSON.stringify(versionJson())}\n`);
+    else process.stdout.write(`${versionText()}\n`);
     return 0;
   }
-  const ui = parsed.ok ? chooseUi(parsed.options, io) : (io.ui ?? plainUi());
-  const outcome = await execute(argv, { ...io, ui });
-  renderText(outcome, ui);
+  let ui = parsed.ok ? chooseUi(parsed.options, io) : (io.ui ?? (json ? stderrUi() : plainUi()));
+  if (!json && !(io.stdoutIsTTY ?? process.stdout.isTTY)) ui = withHint(ui);
+  const outcome = await execute(argv, { ...io, ui, emit });
+  print(outcome, ui, json, emit);
   return exitCode(outcome);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EXAMPLES, type Options, parseArgv } from '../src/args';
+import { EXAMPLES, type Options, parseArgv, wantsJson } from '../src/args';
 
 function options(argv: string[]) {
   const result = parseArgv(argv);
@@ -27,6 +27,7 @@ describe('parseArgv', () => {
       help: false,
       version: false,
       check: false,
+      json: false,
     };
     expect(options([])).toEqual(defaults);
   });
@@ -100,5 +101,31 @@ describe('parseArgv', () => {
 
   it('turns other parser errors into a message instead of throwing', () => {
     expect(message(['--scope'])).toMatch(/--scope.*\. Run with --help to see the options\.$/);
+  });
+});
+
+describe('wantsJson', () => {
+  it('takes the last of --json and --no-json, before --', () => {
+    expect(wantsJson(['x', '--json'])).toBe(true);
+    expect(wantsJson(['--json', '--no-json'])).toBe(false);
+    expect(wantsJson(['--no-json', '--json'])).toBe(true);
+    expect(wantsJson(['x'])).toBe(false);
+  });
+
+  it('reads --json after -- as the folder', () => {
+    expect(wantsJson(['--', '--json'])).toBe(false);
+    expect(parseArgv(['--', '--json'])).toMatchObject({ ok: true, options: { folder: '--json' } });
+  });
+
+  it('answers JSON for arguments that fail to parse', () => {
+    for (const argv of [['--json=1'], ['--scope', '--json']]) {
+      expect(parseArgv(argv).ok).toBe(false);
+      expect(wantsJson(argv)).toBe(true);
+    }
+  });
+
+  it('parses --json and --no-json', () => {
+    expect(parseArgv(['x', '--json'])).toMatchObject({ ok: true, options: { json: true } });
+    expect(parseArgv(['x', '--json', '--no-json'])).toMatchObject({ options: { json: false } });
   });
 });
