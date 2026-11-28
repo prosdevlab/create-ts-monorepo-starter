@@ -93,7 +93,7 @@ export interface MainIo {
   interactive?: boolean;
   ui?: Ui;
   prompts?: Prompts;
-  /** Runs commands for `--check`. */
+  /** Runs commands for `--check` and the git identity; `run` takes its own through `runDeps`. */
   exec?: Exec;
   /** Passed to `run`. */
   runDeps?: RunDeps;
@@ -115,6 +115,9 @@ async function check(ui: Ui, exec: Exec | undefined): Promise<Outcome> {
   return { ok: true, kind: 'checked', pnpm, warnings: [] };
 }
 
+/** An error the command didn't expect, as a failure: it prints `✗ <message>` and exits 1. */
+const failed = (error: unknown): Outcome => ({ ok: false, error: failureFrom(error) });
+
 const isInteractive = (options: Options, io: MainIo) =>
   !options.yes && (io.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY));
 
@@ -130,7 +133,7 @@ export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome>
   const parsed = parseArgv(argv);
   if (!parsed.ok) return usageFailure(parsed.message);
   const { options } = parsed;
-  if (options.check) return check(chooseUi(options, io), io.exec);
+  if (options.check) return check(chooseUi(options, io), io.exec).catch(failed);
   const cwd = io.cwd ?? process.cwd();
   const interactive = isInteractive(options, io);
   // A bad flag fails at once, before any question.
@@ -141,7 +144,12 @@ export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome>
     if (problem) return usageFailure(problem);
   }
   const now = new Date();
-  const holder = (await gitIdentity(cwd)).name;
+  let holder: string | undefined;
+  try {
+    holder = (await gitIdentity(cwd, io.exec)).name;
+  } catch (error) {
+    return failed(error);
+  }
 
   let plan: RunPlan | undefined;
   if (!interactive) {
@@ -152,7 +160,7 @@ export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome>
       plan = planFromOptions(options, cwd, now, holder);
     } catch (error) {
       if (error instanceof NameError) return usageFailure(error.message);
-      throw error;
+      return failed(error);
     }
   }
 

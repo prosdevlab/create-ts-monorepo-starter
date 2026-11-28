@@ -260,16 +260,16 @@ describe('main --check: exact text', () => {
     ]);
   });
 
-  it('rejects when the exec that detects pnpm throws synchronously', async () => {
+  it('fails, exit 1, when the exec that detects pnpm throws synchronously', async () => {
     const { calls, ui } = recordingUi();
     const exec: Exec = () => {
       throw new Error('spawn exploded');
     };
-    await expect(main(['--check'], { cwd, ui, exec })).rejects.toThrow('spawn exploded');
-    expect(calls).toEqual(['intro']);
+    expect(await main(['--check'], { cwd, ui, exec })).toBe(1);
+    expect(calls).toEqual(['intro', 'fail: spawn exploded']);
   });
 
-  it('rejects when the exec that checks the switch throws synchronously', async () => {
+  it('fails, exit 1, when the exec that checks the switch throws synchronously', async () => {
     const { calls, ui } = recordingUi();
     let n = 0;
     // An async exec that rejects is caught by checkSwitch as a failed switch: only a sync throw escapes.
@@ -278,8 +278,34 @@ describe('main --check: exact text', () => {
       if (n > 1) throw new Error('spawn exploded');
       return Promise.resolve({ code: 0, stdout: '10.28.0\n', stderr: '' });
     };
-    await expect(main(['--check'], { cwd, ui, exec })).rejects.toThrow('spawn exploded');
-    expect(calls).toEqual(['intro']);
+    expect(await main(['--check'], { cwd, ui, exec })).toBe(1);
+    expect(calls).toEqual(['intro', 'fail: spawn exploded']);
+  });
+
+  it('fails, exit 1, when reading the git identity throws, and creates nothing', async () => {
+    const { calls, ui } = recordingUi();
+    const exec: Exec = (cmd) => {
+      if (cmd === 'git') throw new Error('git exploded');
+      return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+    };
+    expect(await main(['my-tools', '-y'], { cwd, ui, exec })).toBe(1);
+    expect(calls).toEqual(['fail: git exploded']);
+    expect(readdirSync(cwd)).toEqual([]);
+  });
+
+  it('reads the git identity through the exec it is given', async () => {
+    const seen: string[] = [];
+    const exec: Exec = (cmd, args) => {
+      seen.push([cmd, ...args].join(' '));
+      return Promise.resolve({ code: 1, stdout: '', stderr: '' });
+    };
+    await execute(['my-tools', '-y'], {
+      cwd,
+      ui: recordingUi().ui,
+      exec,
+      runDeps: { exec: () => Promise.reject(new Error('stop before the run does anything')) },
+    });
+    expect(seen).toEqual(['git config user.name', 'git config user.email']);
   });
 });
 
