@@ -201,15 +201,33 @@ export interface InterruptDeps {
   live?: () => boolean;
   stop?: () => Promise<boolean>;
   remove?: (path: string) => void;
+  /** Registers the handler for SIGINT, SIGTERM and SIGHUP; returns the unregister function. */
+  on?: (handler: () => void) => () => void;
+  /** Checked first: while it returns false, a signal does nothing at all. */
+  active?: () => boolean;
+  /**
+   * More folders to remove, read when the signal is handled: `checkSwitch`'s `ctms-pnpm-*` folder.
+   * One that can't be removed is ignored: it is in the system temp folder, not the user's.
+   */
+  scratch?: () => string[];
 }
 
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
 
+/** Calls `handler` on SIGINT, SIGTERM and SIGHUP. Returns the unregister function. */
+export function onSignals(handler: () => void): () => void {
+  for (const signal of SIGNALS) process.on(signal, handler);
+  return () => {
+    for (const signal of SIGNALS) process.off(signal, handler);
+  };
+}
+
 /**
  * On SIGINT, SIGTERM or SIGHUP: stops the running commands (pnpm and what it started), waiting
- * at most 5 s, then deletes `temp` and exits 130. Returns the unregister function.
+ * at most 5 s, then deletes `temp` (when there is one) and the `scratch` folders, and exits 130.
+ * `removed` is about `temp` only. Returns the unregister function.
  */
-export function onInterrupt(temp: string, deps: InterruptDeps = {}): () => void {
+export function onInterrupt(temp: string | undefined, deps: InterruptDeps = {}): () => void {
   const exit = deps.exit ?? ((code: number) => process.exit(code));
   const live = deps.live ?? hasLiveChildren;
   const stop = deps.stop ?? (() => stopChildren({ timeout: 5000 }));
@@ -219,17 +237,32 @@ export function onInterrupt(temp: string, deps: InterruptDeps = {}): () => void 
       rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
   let handling = false;
   const finish = (stopped: boolean) => {
-    let removed = false;
+    let removed = true;
     try {
-      remove(temp);
-      removed = !existsSync(temp);
-    } catch {
-      removed = false;
+      if (temp !== undefined) {
+        try {
+          remove(temp);
+          removed = !existsSync(temp);
+        } catch {
+          removed = false;
+        }
+      }
+      let scratch: string[] = [];
+      try {
+        scratch = deps.scratch?.() ?? [];
+      } catch {}
+      for (const dir of scratch) {
+        try {
+          remove(dir);
+        } catch {}
+      }
     } finally {
       exit(130, { removed, stopped });
     }
   };
   const handler = () => {
+    // Another handler owns this signal (`run()`'s, while it runs).
+    if (deps.active && !deps.active()) return;
     // A second signal while the first is handled changes nothing.
     if (handling) return;
     handling = true;
@@ -241,8 +274,5 @@ export function onInterrupt(temp: string, deps: InterruptDeps = {}): () => void 
     }
     stop().then(finish, () => finish(false));
   };
-  for (const signal of SIGNALS) process.on(signal, handler);
-  return () => {
-    for (const signal of SIGNALS) process.off(signal, handler);
-  };
+  return (deps.on ?? onSignals)(handler);
 }

@@ -1,13 +1,17 @@
 #!/usr/bin/env node
-import { FAILURE, main } from './main.js';
+import { wantsJson } from './args.js';
+import { crashed, emitter } from './emit.js';
+import { main } from './main.js';
+
+const argv = process.argv.slice(2);
+const out = emitter();
 
 // Set the exit code instead of calling process.exit(), so pending output is flushed first.
-main(process.argv.slice(2)).then(
+main(argv, { emit: out.emit }).then(
   (code) => {
     process.exitCode = code;
   },
   (error: unknown) => {
-    process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
-    process.exitCode = FAILURE;
+    process.exitCode = crashed(error, wantsJson(argv), out);
   }
 );

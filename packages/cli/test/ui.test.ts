@@ -74,6 +74,7 @@ describe('helpText', () => {
         '  --force             move a non-empty folder aside first',
         '  -y, --yes           accept every default, ask nothing',
         '  --check             check that pnpm is ready, create nothing',
+        '  --json              print one JSON object on stdout (implies -y)',
         '  -h, --help          show this help',
         '  -v, --version       show the CLI and template versions',
         '',

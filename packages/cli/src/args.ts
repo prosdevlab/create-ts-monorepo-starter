@@ -14,6 +14,8 @@ export interface Options {
   help: boolean;
   version: boolean;
   check: boolean;
+  /** One JSON object on stdout; implies `-y`. */
+  json: boolean;
 }
 
 export type ParseResult = { ok: true; options: Options } | { ok: false; message: string };
@@ -72,6 +74,7 @@ export function parseArgv(argv: string[]): ParseResult {
     help: values.help ?? false,
     version: values.version ?? false,
     check: values.check ?? false,
+    json: values.json ?? false,
   };
   if (positionals[0] !== undefined) options.folder = positionals[0];
   if (values.scope !== undefined) options.scope = values.scope;
@@ -99,6 +102,22 @@ function parse(argv: string[]) {
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
       check: { type: 'boolean' },
+      json: { type: 'boolean' },
     },
   });
+}
+
+/**
+ * Whether the person asked for JSON, read from the raw arguments so that arguments that don't parse
+ * still get a JSON answer. The last of `--json` and `--no-json` before `--` wins; `--json=...` asks
+ * for it too (and then fails to parse, as a usage error in JSON).
+ */
+export function wantsJson(argv: string[]): boolean {
+  let json = false;
+  for (const arg of argv) {
+    if (arg === '--') break;
+    if (arg === '--json' || arg.startsWith('--json=')) json = true;
+    else if (arg === '--no-json') json = false;
+  }
+  return json;
 }

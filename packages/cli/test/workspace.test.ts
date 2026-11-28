@@ -450,6 +450,87 @@ describe('onInterrupt', () => {
     }
   });
 
+  it('does nothing at all while active returns false', () => {
+    const temp = join(root, '.t');
+    put(temp, 'f', 'x');
+    const calls: string[] = [];
+    const { exits, off } = listen(temp, {
+      active: () => false,
+      onStart: () => calls.push('start'),
+      live: () => {
+        calls.push('live');
+        return false;
+      },
+    });
+    try {
+      process.emit('SIGINT');
+      expect(calls).toEqual([]);
+      expect(exits).toEqual([]);
+      expect(existsSync(temp)).toBe(true);
+    } finally {
+      off();
+    }
+  });
+
+  it('removes the scratch folders read at the signal, and ignores one it cannot remove', () => {
+    const temp = join(root, '.t');
+    put(temp, 'f', 'x');
+    const scratch: string[] = [];
+    const removed: string[] = [];
+    const { exits, off } = listen(temp, {
+      scratch: () => scratch,
+      remove: (path: string) => {
+        removed.push(path);
+        if (path.endsWith('stuck')) throw new Error('EBUSY');
+        rmSync(path, { recursive: true, force: true });
+      },
+    });
+    // Made after registering: the getter is read when the signal is handled.
+    scratch.push(join(root, 'ctms-pnpm-a'), join(root, 'stuck'));
+    put(join(root, 'ctms-pnpm-a'), 'package.json', '{}');
+    try {
+      process.emit('SIGINT');
+      expect(removed).toEqual([temp, join(root, 'ctms-pnpm-a'), join(root, 'stuck')]);
+      expect(existsSync(join(root, 'ctms-pnpm-a'))).toBe(false);
+      expect(exits).toEqual([[130, { removed: true, stopped: true }]]);
+    } finally {
+      off();
+    }
+  });
+
+  it('with no temp folder, reports it removed', () => {
+    const exits: [number, Outcome][] = [];
+    const off = onInterrupt(undefined, {
+      exit: (code, outcome) => exits.push([code, outcome]),
+      live: () => false,
+    });
+    try {
+      process.emit('SIGTERM');
+      expect(exits).toEqual([[130, { removed: true, stopped: true }]]);
+    } finally {
+      off();
+    }
+  });
+
+  it('registers through on, and touches no process listener', () => {
+    const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+    const before = signals.map((s) => process.listenerCount(s));
+    let handler: (() => void) | undefined;
+    const exits: number[] = [];
+    const off = onInterrupt(join(root, '.t'), {
+      on: (h) => {
+        handler = h;
+        return () => undefined;
+      },
+      exit: (code) => exits.push(code),
+      live: () => false,
+    });
+    expect(signals.map((s) => process.listenerCount(s))).toEqual(before);
+    handler?.();
+    expect(exits).toEqual([130]);
+    off();
+  });
+
   it('stops listening once unregistered', () => {
     const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
     const before = signals.map((s) => process.listenerCount(s));

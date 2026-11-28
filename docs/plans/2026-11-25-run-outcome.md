@@ -1,5 +1,6 @@
-
 # Plan: one outcome for every exit (#21, part 1)
+
+> Snapshot as of #36 (released in 0.3.0). The code and the README are the current truth; line numbers and unticked boxes here are not.
 
 **Goal:** Every way the CLI can end produces one `Outcome` value: what happened, what the run really left behind, and, for a failure, a code. A failed install exits with 4. The text a person sees doesn't change, and tests written before the refactor prove it.
 

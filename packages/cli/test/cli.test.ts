@@ -9,9 +9,10 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { HINT } from '../src/main';
 import { versionText } from '../src/ui';
 
 // Spawns the built dist/cli.js with stdin and stdout piped, so neither is a terminal.
@@ -50,7 +51,7 @@ function cli(args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
  * fetches metadata from the npm registry, so a slow registry would time this test out; the e2e
  * tests cover real pnpm.
  */
-function fakePnpm(version = '12.15.0'): string {
+function fakePnpm(version = '12.15.0', failInstall = false): string {
   const dir = join(root, 'fake-bin');
   mkdirSync(dir);
   const calls = join(root, 'pnpm-calls.txt');
@@ -60,6 +61,10 @@ function fakePnpm(version = '12.15.0'): string {
 const args = process.argv.slice(2);
 if (args[0] === '--version') console.log(${JSON.stringify(version)});
 else appendFileSync(${JSON.stringify(calls)}, args.join(' ') + '\\n');
+if (${failInstall} && args[0] === 'install') {
+  console.error('ERR_PNPM_FETCH network down');
+  process.exit(1);
+}
 `
   );
   writeFileSync(
@@ -113,7 +118,7 @@ describe('cli', () => {
   it('creates a committed project without installing, and no colour with NO_COLOR', () => {
     const calls = fakePnpm();
     const result = cli(['proj', '--no-install', '-y'], { NO_COLOR: '1' });
-    expect(result.stderr).toBe('');
+    expect(result.stderr).toBe(`${HINT}\n`);
     expect(result.status).toBe(0);
     expect(`${result.stdout}${result.stderr}`).not.toContain('\x1b[');
     expect(result.stdout).toContain('✓ Created proj');
@@ -181,7 +186,7 @@ describe('cli', () => {
       expect(result.status).toBe(1);
       expect(result.stdout).toMatch(new RegExp(`${INTRO.source}$`));
       expect(result.stderr).toBe(
-        "✗ full isn't empty. Use another folder, or pass --force to move it aside.\n"
+        `${HINT}\n✗ full isn't empty. Use another folder, or pass --force to move it aside.\n`
       );
     });
 
@@ -189,7 +194,7 @@ describe('cli', () => {
       fakePnpm();
       const result = cli(['proj', '--no-install', '-y'], { NO_COLOR: '1' });
       expect(result.status).toBe(0);
-      expect(result.stderr).toBe('');
+      expect(result.stderr).toBe(`${HINT}\n`);
       expect(result.stdout.replace(INTRO, '<intro>\n')).toBe(
         [
           '<intro>',
@@ -210,5 +215,74 @@ describe('cli', () => {
         ].join('\n')
       );
     }, 60_000);
+  });
+});
+
+describe('cli --json', () => {
+  /** Stdout must be exactly one JSON object and its newline. */
+  const object = (stdout: string) => {
+    expect(stdout.endsWith('\n')).toBe(true);
+    expect(stdout.trimEnd().split('\n')).toHaveLength(1);
+    return JSON.parse(stdout);
+  };
+
+  it('created', () => {
+    fakePnpm();
+    const result = cli(['proj', '--no-install', '--json']);
+    expect(result.status).toBe(0);
+    const created = object(result.stdout);
+    expect(created).toMatchObject({
+      ok: true,
+      kind: 'created',
+      project: { path: expect.stringMatching(/[\\/]proj$/), folder: 'proj' },
+      install: { ran: false, seconds: 0 },
+    });
+    // The child's cwd can be spelled differently (macOS /private/var), so not compared whole.
+    expect(isAbsolute(created.project.path)).toBe(true);
+    expect(result.stderr).toContain('✓ Created proj');
+    expect(result.stderr).not.toContain(HINT);
+  }, 60_000);
+
+  it('checked', () => {
+    fakePnpm();
+    const result = cli(['--check', '--json']);
+    expect(result.status).toBe(0);
+    expect(object(result.stdout)).toMatchObject({ ok: true, kind: 'checked' });
+  });
+
+  it('version', () => {
+    const result = cli(['--version', '--json']);
+    expect(result.status).toBe(0);
+    expect(object(result.stdout)).toMatchObject({ ok: true, kind: 'version', schemaVersion: 1 });
+    expect(result.stderr).toBe('');
+  });
+
+  it('usage, also when the arguments do not parse', () => {
+    for (const args of [['--shout', '--json'], ['--json=1'], ['-y', '--json']]) {
+      const result = cli(args);
+      expect(result.status).toBe(2);
+      expect(object(result.stdout)).toMatchObject({ ok: false, error: { code: 'usage' } });
+    }
+  });
+
+  it('failed install, exit 4, with the output and the retry', () => {
+    fakePnpm('12.15.0', true);
+    const result = cli(['proj', '-y', '--no-git', '--json']);
+    expect(result.status).toBe(4);
+    expect(object(result.stdout)).toMatchObject({
+      ok: false,
+      error: { code: 'install-failed', output: ['ERR_PNPM_FETCH network down'] },
+      left: { target: 'missing' },
+      retry: { argv: expect.arrayContaining(['--json', '--', 'proj']) },
+    });
+    expect(readdirSync(root)).not.toContain('proj');
+  }, 60_000);
+
+  it('the refused folder', () => {
+    mkdirSync(join(root, 'full'));
+    writeFileSync(join(root, 'full', 'a'), 'x');
+    const result = cli(['full', '--json']);
+    expect(result.status).toBe(1);
+    expect(object(result.stdout)).toMatchObject({ ok: false, error: { code: 'target-not-empty' } });
   });
 });

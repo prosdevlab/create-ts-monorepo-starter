@@ -2,7 +2,7 @@ import { isAbsolute, relative, sep } from 'node:path';
 import { styleText } from 'node:util';
 import * as p from '@clack/prompts';
 import { EXAMPLES, type Example } from './args.js';
-import type { ErrorCode } from './outcome.js';
+import type { ErrorCode, Step } from './outcome.js';
 import type { RunPlan, RunResult } from './run.js';
 import { cliVersion, pnpmSpec, templateLabel } from './template.js';
 
@@ -21,7 +21,8 @@ export const CANCELLED = 'Cancelled. Nothing was written.';
 
 const NAME = 'create-ts-monorepo-starter';
 
-const CHECKLIST: [item: string, section: string][] = [
+/** What to set up when wanted, each with the README section that says how. */
+export const CHECKLIST: [item: string, section: string][] = [
   ['Previews on every PR: install the pkg.pr.new app, set PKG_PR_NEW', 'Preview Packages'],
   [
     'Private vulnerability reporting: Settings → Advanced Security',
@@ -52,6 +53,7 @@ Options
   --force             move a non-empty folder aside first
   -y, --yes           accept every default, ask nothing
   --check             check that pnpm is ready, create nothing
+  --json              print one JSON object on stdout (implies -y)
   -h, --help          show this help
   -v, --version       show the CLI and template versions
 
@@ -82,15 +84,32 @@ export function shellQuote(path: string, platform: NodeJS.Platform = process.pla
   return windows ? `"${path}"` : `'${path.replaceAll("'", "'\\''")}'`;
 }
 
+/**
+ * The commands to run after a created project, in order, each in the project folder: installing
+ * pnpm when there is none (`setup`), then the install when it was skipped, the build and the tests.
+ */
+export function nextSteps(result: RunResult, plan: RunPlan): { setup: Step[]; next: Step[] } {
+  const step = (...argv: string[]): Step => ({ argv, cwd: plan.target });
+  return {
+    setup: result.pnpm.kind === 'none' ? [step('npm', 'install', '-g', 'pnpm')] : [],
+    next: [
+      ...(result.installed ? [] : [step('pnpm', 'install')]),
+      step('pnpm', 'build'),
+      step('pnpm', 'test'),
+    ],
+  };
+}
+
 /** What the final message says, shared by both looks. */
 function closing(result: RunResult, plan: RunPlan) {
   const pin = pnpmSpec().slice('pnpm@'.length);
+  const steps = nextSteps(result, plan);
+  const text = (s: Step) => s.argv.join(' ');
   let title = 'Ready.';
-  let commands: string[] = [];
+  const commands = steps.setup.map(text);
   let notes: string[] = [];
   if (result.pnpm.kind === 'none') {
     title = 'One step left before your first commit:';
-    commands = ['npm install -g pnpm'];
     notes = [
       `The git hooks run pnpm. Any pnpm from 10.26 on switches itself to ${pin.split('.')[0]}.`,
     ];
@@ -99,11 +118,10 @@ function closing(result: RunResult, plan: RunPlan) {
     ? ["Dependencies aren't installed: the first pnpm install installs them and the git hooks."]
     : [];
   const dir = cdPath(plan.target, result.backup !== undefined);
-  const next = [
-    ...(dir ? [`cd ${dir}`] : []),
-    ...(result.installed ? [] : ['pnpm install']),
-    'pnpm build && pnpm test',
-  ];
+  // The build and the tests share a line.
+  const lines = steps.next.map(text);
+  const both = lines.splice(-2).join(' && ');
+  const next = [...(dir ? [`cd ${dir}`] : []), ...lines, both];
   return { title, commands, notes, extra, next };
 }
 

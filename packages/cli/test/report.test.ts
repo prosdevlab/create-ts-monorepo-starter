@@ -3,7 +3,7 @@ import type { Outcome } from '../src/outcome';
 import { tooOld } from '../src/pnpm';
 import { failureFrom, renderText, usageFailure } from '../src/report';
 import { pnpmSpec } from '../src/template';
-import { CancelledError, type Ui } from '../src/ui';
+import { CancelledError, shellQuote, type Ui } from '../src/ui';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -63,6 +63,35 @@ describe('renderText', () => {
     expect(calls).toEqual(['fail: x | y']);
   });
 
+  it('ends a failed install or an interrupt with the retry, quoting only what needs it', () => {
+    const retry = {
+      argv: ['-y', '--scope', '@a', '--examples', 'lib,cli', '--', 'my tools'],
+      cwd: '/w',
+    };
+    for (const code of ['install-failed', 'interrupted'] as const) {
+      const { calls, ui } = recording();
+      renderText({ ok: false, error: { code, title: 'T', lines: ['l'], fixes: [] }, retry }, ui);
+      expect(calls).toEqual([
+        `fail: T | l | Retry: create-ts-monorepo-starter -y --scope @a --examples lib,cli -- ${shellQuote('my tools')}`,
+      ]);
+    }
+  });
+
+  it('adds no retry line without a retry, or for the pnpm failures that already say how', () => {
+    const retry = { argv: ['-y', '--', 'x'], cwd: '/w' };
+    const none = recording();
+    renderText(
+      { ok: false, error: { code: 'install-failed', title: 'T', lines: [], fixes: [] } },
+      none.ui
+    );
+    expect(none.calls).toEqual(['fail: T']);
+    for (const code of ['pnpm-too-old', 'pnpm-switch-failed'] as const) {
+      const { calls, ui } = recording();
+      renderText({ ok: false, error: { code, title: 'T', lines: [], fixes: [] }, retry }, ui);
+      expect(calls).toEqual(['fail: T']);
+    }
+  });
+
   it('shows --check results', () => {
     const version = pnpmSpec().slice('pnpm@'.length);
     const ready = recording();
@@ -74,8 +103,14 @@ describe('renderText', () => {
       `step: Ready: pnpm 10.28.0 switches to pnpm ${version} for this project`,
     ]);
     const none = recording();
-    renderText({ ok: true, kind: 'checked', pnpm: { kind: 'none' }, warnings: [] }, none.ui);
-    expect(none.calls[0]).toMatch(/^warn: pnpm isn't installed \| Creating works/);
+    const warning = {
+      code: 'pnpm-missing',
+      title: "pnpm isn't installed",
+      lines: ['a', 'b'],
+      fixes: [],
+    };
+    renderText({ ok: true, kind: 'checked', pnpm: { kind: 'none' }, warnings: [warning] }, none.ui);
+    expect(none.calls).toEqual(["warn: pnpm isn't installed | a | b"]);
   });
 
   it('closes a created project with the outro', () => {

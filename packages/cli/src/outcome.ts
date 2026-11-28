@@ -63,12 +63,22 @@ export function codeOf(error: unknown): ErrorCode {
   return typeof code === 'string' && ERROR_CODES.has(code) ? (code as ErrorCode) : 'unexpected';
 }
 
-/** A failure the CLI throws on purpose: a code, and the output lines that explain it. */
+/** What a failure knows beyond its text: how to fix it, what it needed and found, the tool's output. */
+export interface Details {
+  fixes?: Fix[];
+  required?: Record<string, string>;
+  found?: Record<string, string>;
+  /** The last lines of pnpm's output, credentials removed. */
+  output?: string[];
+}
+
+/** A failure the CLI throws on purpose: a code, the output lines that explain it, and its details. */
 export class CliError extends Error {
   constructor(
     readonly code: ErrorCode,
     message: string,
-    readonly lines: string[] = []
+    readonly lines: string[] = [],
+    readonly details: Details = {}
   ) {
     super(message);
   }
@@ -98,13 +108,22 @@ export interface Left {
   running?: true;
 }
 
-interface Fix {
-  argv?: string[];
-  see?: string;
-  scope: 'user' | 'project';
+/**
+ * A step that fixes a problem: a command as an argument list, or a page to read. `scope` says what
+ * it changes: the project, the person's own toolchain (`user`), or the machine (`system`).
+ */
+export type Fix =
+  | { argv: string[]; scope: 'project' | 'user' | 'system' }
+  | { see: string; scope: 'project' | 'user' | 'system' };
+
+/** A command to run: its arguments, and the folder to run it in (absolute). */
+export interface Step {
+  argv: string[];
+  cwd: string;
 }
 
-interface Problem {
+/** A problem a run finished with anyway (a warning), with a code and any fixes. */
+export interface Problem {
   code: string;
   title: string;
   lines: string[];
@@ -118,10 +137,11 @@ export interface Failure {
   fixes: Fix[];
   required?: Record<string, string>;
   found?: Record<string, string>;
+  output?: string[];
 }
 
 /** How a run ended: what happened, what it left behind, and for a failure, a code. */
 export type Outcome =
   | { ok: true; kind: 'created'; plan: RunPlan; result: RunResult; warnings: Problem[]; left: Left }
   | { ok: true; kind: 'checked'; pnpm: PnpmStatus; warnings: Problem[] }
-  | { ok: false; error: Failure; left?: Left; retry?: string[] };
+  | { ok: false; error: Failure; left?: Left; retry?: Step };

@@ -2,7 +2,8 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { constants, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
-import { CliError } from './outcome.js';
+import { CliError, type Details, type Fix } from './outcome.js';
+import { redact } from './redact.js';
 import { pnpmSpec } from './template.js';
 
 export type PnpmStatus =
@@ -186,8 +187,13 @@ export async function detectPnpm(
 
 /** A toolchain problem the user has to fix before anything is created; `lines` say how. */
 export class ToolchainError extends CliError {
-  constructor(code: 'pnpm-too-old' | 'pnpm-switch-failed', message: string, lines: string[]) {
-    super(code, message, lines);
+  constructor(
+    code: 'pnpm-too-old' | 'pnpm-switch-failed',
+    message: string,
+    lines: string[],
+    details: Details
+  ) {
+    super(code, message, lines, details);
     this.name = 'ToolchainError';
   }
 }
@@ -197,11 +203,17 @@ export const PNPM_HELP = 'https://github.com/prosdevlab/create-ts-monorepo-start
 /** The stop for a pnpm older than 10.26, which can't switch itself to the template's pnpm. */
 export function tooOld(found: string, spec: string): ToolchainError {
   const version = spec.slice('pnpm@'.length);
-  return new ToolchainError('pnpm-too-old', `pnpm ${found} is too old for this project`, [
-    `This project needs pnpm 10.26 or newer, which switches itself to pnpm ${version}.`,
-    'Upgrade pnpm: npm install -g pnpm (or https://pnpm.io/installation)',
-    'Then run this command again. Nothing was created.',
-  ]);
+  const fix = { argv: ['npm', 'install', '-g', 'pnpm'], scope: 'user' } satisfies Fix;
+  return new ToolchainError(
+    'pnpm-too-old',
+    `pnpm ${found} is too old for this project`,
+    [
+      `This project needs pnpm 10.26 or newer, which switches itself to pnpm ${version}.`,
+      `Upgrade pnpm: ${fix.argv.join(' ')} (or https://pnpm.io/installation)`,
+      'Then run this command again. Nothing was created.',
+    ],
+    { fixes: [fix], required: { pnpm: '>=10.26' }, found: { pnpm: found } }
+  );
 }
 
 /** Whether a file exists; injected so `checkSwitch` stays testable without a real pnpm. */
@@ -216,15 +228,19 @@ const fileExists: Exists = (path) =>
 /**
  * Runs `pnpm --version` in an empty folder pinned to `spec` (`pnpm@12.15.0`), where pnpm switches
  * itself to that version as the install will. Throws a ToolchainError when the switch fails.
+ * `onDir` gets that folder as soon as it exists, so an interrupt handler can remove it: an
+ * interrupted pnpm never returns, and then this function never gets to.
  */
 export async function checkSwitch(
   spec: string,
   found: string,
   exec: Exec = defaultExec,
   root: string = tmpdir(),
-  exists: Exists = fileExists
+  exists: Exists = fileExists,
+  onDir: (dir: string) => void = () => undefined
 ): Promise<void> {
   const dir = await mkdtemp(join(root, 'ctms-pnpm-'));
+  onDir(dir);
   try {
     await writeFile(join(dir, 'package.json'), `${JSON.stringify({ packageManager: spec })}\n`);
     const result = await exec('pnpm', ['--version'], { cwd: dir }).catch(() => null);
@@ -259,17 +275,22 @@ export function switchFailure(
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .slice(0, 2);
+    .slice(0, 2)
+    .map(redact);
+  const fix: Fix = installer
+    ? { argv: ['node', installer], scope: 'user' }
+    : { see: PNPM_HELP, scope: 'user' };
   return new ToolchainError(
     'pnpm-switch-failed',
     `pnpm ${found} couldn't switch to pnpm ${version}, which this project needs`,
     [
       ...said.map((line) => `pnpm: ${line}`),
-      installer
-        ? `Fix: node ${installer}`
-        : `Fix your pnpm so it can switch to ${version}: ${PNPM_HELP}`,
+      'argv' in fix
+        ? `Fix: ${fix.argv.join(' ')}`
+        : `Fix your pnpm so it can switch to ${version}: ${fix.see}`,
       'Then run this command again. Nothing was created.',
-    ]
+    ],
+    { fixes: [fix], required: { pnpm: version }, found: { pnpm: found } }
   );
 }
 

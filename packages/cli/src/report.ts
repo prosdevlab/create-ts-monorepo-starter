@@ -1,13 +1,28 @@
 import { CliError, codeOf, type Failure, type Outcome } from './outcome.js';
 import { pnpmSpec } from './template.js';
-import { CANCELLED, CancelledError, type Ui } from './ui.js';
+import { CANCELLED, CancelledError, shellQuote, type Ui } from './ui.js';
+
+/** An argument as a shell reads it: `@scope` and `lib,cli` need no quotes; anything else goes to `shellQuote`. */
+const quoteArg = (arg: string) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : shellQuote(arg));
+
+/** The failures whose text gains a retry line; the pnpm ones already say "run this command again". */
+const RETRY_LINE: ReadonlySet<string> = new Set(['install-failed', 'interrupted']);
 
 /** The failure for an error: the text `report()` printed before, and the code. */
 export function failureFrom(error: unknown): Failure {
   const code = codeOf(error);
   if (error instanceof CancelledError) return { code, title: CANCELLED, lines: [], fixes: [] };
   if (error instanceof CliError) {
-    return { code, title: error.message, lines: error.lines, fixes: [] };
+    const { fixes = [], required, found, output } = error.details;
+    return {
+      code,
+      title: error.message,
+      lines: error.lines,
+      fixes,
+      ...(required && { required }),
+      ...(found && { found }),
+      ...(output && { output }),
+    };
   }
   const [title = 'Something went wrong', ...lines] = String(
     error instanceof Error ? error.message : error
@@ -25,8 +40,13 @@ export function usageFailure(message: string): Outcome {
 export function renderText(outcome: Outcome, ui: Ui): void {
   if (!outcome.ok) {
     const { code, title, lines } = outcome.error;
-    if (code === 'usage') process.stderr.write(`${[title, ...lines].join('\n')}\n`);
-    else ui.fail(title, lines);
+    if (code === 'usage') {
+      process.stderr.write(`${[title, ...lines].join('\n')}\n`);
+      return;
+    }
+    const retry = outcome.retry && RETRY_LINE.has(code) ? outcome.retry : undefined;
+    const command = retry && ['create-ts-monorepo-starter', ...retry.argv.map(quoteArg)];
+    ui.fail(title, command ? [...lines, `Retry: ${command.join(' ')}`] : lines);
     return;
   }
   if (outcome.kind === 'created') {
@@ -34,12 +54,8 @@ export function renderText(outcome: Outcome, ui: Ui): void {
     return;
   }
   const version = pnpmSpec().slice('pnpm@'.length);
-  if (outcome.pnpm.kind === 'none') {
-    ui.warn("pnpm isn't installed", [
-      `Creating works: the install uses a temporary pnpm ${version} (npm exec).`,
-      `Working in the project needs pnpm 10.26 or newer: https://pnpm.io/installation`,
-    ]);
-  } else if (outcome.pnpm.kind === 'ok') {
+  for (const warning of outcome.warnings) ui.warn(warning.title, warning.lines);
+  if (outcome.pnpm.kind === 'ok') {
     ui.step(`Ready: pnpm ${outcome.pnpm.version} switches to pnpm ${version} for this project`);
   }
 }
