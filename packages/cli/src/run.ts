@@ -6,7 +6,16 @@ import { generate } from './generate.js';
 import { initAndCommit, insideGitRepo } from './git.js';
 import { assertLockfileSubset } from './lockfile.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
-import { CliError, coded, type ErrorCode, type Left, type Outcome } from './outcome.js';
+import {
+  CliError,
+  coded,
+  type Details,
+  type ErrorCode,
+  type Fix,
+  type Left,
+  type Outcome,
+  type Problem,
+} from './outcome.js';
 import {
   checkSwitch,
   defaultExec,
@@ -16,6 +25,7 @@ import {
   tooOld,
   type UsablePnpm,
 } from './pnpm.js';
+import { redact } from './redact.js';
 import { renderText } from './report.js';
 import { cliVersion, pnpmSpec, templateDir, templateLabel } from './template.js';
 import { CANCELLED, type Ui } from './ui.js';
@@ -55,8 +65,10 @@ export interface RunResult {
   installed: boolean;
   git: GitOutcome;
   packages: string[];
-  /** How long the install (or lockfile update) took; 0 when it was skipped. */
+  /** How long the install took; 0 with `--no-install` (the lockfile update isn't counted). */
   seconds: number;
+  /** What `run()` warned about, in order; each was also shown with `ui.warn`. */
+  warnings: Problem[];
   /** Where a replaced target was moved. */
   backup?: string;
 }
@@ -79,8 +91,8 @@ export interface RunDeps {
 
 /** A failure with the output lines that explain it. */
 class RunError extends CliError {
-  constructor(code: ErrorCode, message: string, lines: string[] = []) {
-    super(code, message, lines);
+  constructor(code: ErrorCode, message: string, lines: string[] = [], details: Details = {}) {
+    super(code, message, lines, details);
     this.name = 'RunError';
   }
 }
@@ -117,9 +129,10 @@ export function planFromOptions(
   };
 }
 
+/** The last lines of a command's output, credentials removed. */
 function lastLines(output: { stdout: string; stderr: string }): string[] {
   const lines = `${output.stdout}\n${output.stderr}`.split(/\r?\n/).filter((l) => l.trim());
-  return lines.slice(-TAIL_LINES);
+  return lines.slice(-TAIL_LINES).map(redact);
 }
 
 type Phase =
@@ -241,6 +254,13 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
   let phase: Phase = { at: 'working' };
   let before: State | undefined;
   const probe = deps.probe ?? probePath;
+  const warnings: Problem[] = [];
+  /** Shows a warning and records it for the result. Lines can quote git or pnpm, so they're redacted. */
+  const warn = (code: string, title: string, lines: string[], fixes: Fix[] = []) => {
+    const shown = lines.map(redact);
+    warnings.push({ code, title, lines: shown, fixes });
+    ui.warn(title, shown);
+  };
   const unregister = (deps.onInterrupt ?? onInterrupt)(temp, {
     onStart: () => {
       interrupted = true;
@@ -314,10 +334,10 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
         if (init.code === 0) git = 'ready';
         else if (init.code === 127) {
           git = 'no-git';
-          ui.warn("git isn't installed", ['The project has no git repository.']);
+          warn('git-missing', "git isn't installed", ['The project has no git repository.']);
         } else {
           git = 'failed';
-          ui.warn("Couldn't initialize git", [(init.stderr || init.stdout).trim()]);
+          warn('git-failed', "Couldn't initialize git", [(init.stderr || init.stdout).trim()]);
         }
       }
     }
@@ -326,9 +346,12 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     const what = plan.install ? 'install dependencies' : 'update the lockfile';
     if (pnpm.kind === 'none') {
       const doing = plan.install ? 'Installing' : 'Updating the lockfile';
-      ui.warn("pnpm isn't installed", [
-        `${doing} with a temporary pnpm ${pin} instead (npm exec).`,
-      ]);
+      warn(
+        'pnpm-missing',
+        "pnpm isn't installed",
+        [`${doing} with a temporary pnpm ${pin} instead (npm exec).`],
+        [{ argv: ['npm', 'install', '-g', 'pnpm'], scope: 'user' }]
+      );
     }
     const using = pnpm.kind === 'ok' ? ` with pnpm ${pin}` : '';
     const started = performance.now();
@@ -341,10 +364,12 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     }
     const seconds = Math.round((performance.now() - started) / 1000);
     if (output.code !== 0) {
+      const tail = lastLines(output);
       throw new RunError(
         'install-failed',
         `Couldn't ${what} (pnpm exited with ${output.code})`,
-        lastLines(output)
+        tail,
+        { output: tail }
       );
     }
     const installed = plan.install;
@@ -363,14 +388,14 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
       } catch (error) {
         // The files are generated and correct, so a failed commit only warns.
         outcome = 'failed';
-        ui.warn("Couldn't make the first commit", [
+        warn('commit-failed', "Couldn't make the first commit", [
           firstLine(error),
           'The repository is initialized: commit the files yourself.',
         ]);
       }
       if (outcome === 'committed') ui.step('Initialized git with a first commit');
       if (outcome === 'no-identity') {
-        ui.warn('Initialized git without a commit', [
+        warn('git-no-identity', 'Initialized git without a commit', [
           'git has no user.name or user.email, so the files are staged but not committed.',
         ]);
       }
@@ -409,7 +434,8 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
       installed,
       git: outcome,
       packages,
-      seconds,
+      seconds: plan.install ? seconds : 0,
+      warnings,
       ...(backup && { backup }),
     };
   } catch (error) {

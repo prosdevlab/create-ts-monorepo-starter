@@ -239,6 +239,41 @@ describe('main --check: exact text', () => {
     ]);
   });
 
+  it('reports a missing pnpm as a pnpm-missing warning on the outcome', async () => {
+    const outcome = await execute(['--check'], {
+      cwd,
+      ui: recordingUi().ui,
+      exec: pnpm({ code: 127 }),
+    });
+    expect(outcome).toMatchObject({
+      ok: true,
+      kind: 'checked',
+      warnings: [
+        {
+          code: 'pnpm-missing',
+          fixes: [{ argv: ['npm', 'install', '-g', 'pnpm'], scope: 'user' }],
+        },
+      ],
+    });
+  });
+
+  it('gives a too-old pnpm its fix, what it needed and what it found', async () => {
+    const outcome = await execute(['--check'], {
+      cwd,
+      ui: recordingUi().ui,
+      exec: pnpm({ code: 0, stdout: '9.15.9\n' }),
+    });
+    expect(outcome).toMatchObject({
+      ok: false,
+      error: {
+        code: 'pnpm-too-old',
+        fixes: [{ argv: ['npm', 'install', '-g', 'pnpm'], scope: 'user' }],
+        required: { pnpm: '>=10.26' },
+        found: { pnpm: '9.15.9' },
+      },
+    });
+  });
+
   it('fails, with every line, when pnpm is too old', async () => {
     const { calls, ui } = recordingUi();
     const code = await main(['--check'], { cwd, ui, exec: pnpm({ code: 0, stdout: '9.15.9\n' }) });
@@ -424,6 +459,93 @@ packages:
     expect(calls.at(-1)).toBe(
       'fail: Lockfile changed during install: | + packages: right-pad@2.0.0'
     );
+  });
+
+  /** The outcome `execute` returns, and what the Ui was shown. */
+  const outcomeOf = async (deps: RunDeps, argv = ['my-tools', '-y', '--no-git']) => {
+    const { calls, ui } = recordingUi();
+    const outcome = await execute(argv, { cwd, ui, runDeps: deps });
+    return { calls, outcome };
+  };
+
+  it('removes credentials from a failed install, in the text and in error.output', async () => {
+    const stderr =
+      'GET https://ada:hunter2@r.example/x\n//r.example/:_authToken=abc123\nERR_PNPM_FETCH';
+    const exec$ = exec({ 'pnpm install': { code: 1, stderr } });
+    const { calls, outcome } = await outcomeOf(runDeps({ exec: exec$ }));
+    const shown = [
+      'GET https://ada:***@r.example/x',
+      '//r.example/:_authToken=***',
+      'ERR_PNPM_FETCH',
+    ];
+    expect(calls.join('\n')).not.toMatch(/hunter2|abc123/);
+    expect(outcome).toMatchObject({
+      ok: false,
+      error: { code: 'install-failed', lines: shown, output: shown },
+    });
+    expect(JSON.stringify(outcome)).not.toMatch(/hunter2|abc123/);
+  });
+
+  it('prints the redacted lines for a failed install', async () => {
+    const exec$ = exec({ 'pnpm install': { code: 1, stderr: '_authToken=abc123' } });
+    const { calls } = await go(runDeps({ exec: exec$ }));
+    expect(calls.at(-1)).toBe(
+      "fail: Couldn't install dependencies (pnpm exited with 1) | _authToken=***"
+    );
+  });
+
+  it('has error.output only for a failed install', async () => {
+    const changed = `${LOCKFILE}\n  right-pad@2.0.0:\n    resolution: {integrity: sha512-y}\n`;
+    const { outcome } = await outcomeOf(runDeps({ generate: generate(changed) }));
+    expect(outcome).toMatchObject({ ok: false, error: { code: 'lockfile-changed' } });
+    expect(outcome).not.toHaveProperty('error.output');
+  });
+
+  it('reports a failed git init as a warning on the created outcome, redacted', async () => {
+    const exec$ = exec({
+      'git init': { code: 129, stderr: 'fatal: https://ada:hunter2@r.example' },
+    });
+    const { calls, outcome } = await outcomeOf(runDeps({ exec: exec$ }), ['my-tools', '-y']);
+    expect(outcome).toMatchObject({
+      ok: true,
+      warnings: [
+        {
+          code: 'git-failed',
+          title: "Couldn't initialize git",
+          lines: ['fatal: https://ada:***@r.example'],
+          fixes: [],
+        },
+      ],
+    });
+    expect(calls).toContain("warn: Couldn't initialize git | fatal: https://ada:***@r.example");
+  });
+
+  it('has no warnings for a clean run', async () => {
+    const { outcome } = await outcomeOf(runDeps(), ['my-tools', '-y']);
+    expect(outcome).toMatchObject({ ok: true, kind: 'created', warnings: [] });
+  });
+
+  it('reports a missing pnpm as a warning with its fix, and an install time of 0 without installing', async () => {
+    const exec$: Exec = async (cmd, args) => {
+      if (cmd === 'pnpm') return { code: 127, stdout: '', stderr: '' };
+      return exec()(cmd, args, {});
+    };
+    const { outcome } = await outcomeOf(runDeps({ exec: exec$ }), [
+      'my-tools',
+      '-y',
+      '--no-git',
+      '--no-install',
+    ]);
+    expect(outcome).toMatchObject({
+      ok: true,
+      result: { seconds: 0 },
+      warnings: [
+        {
+          code: 'pnpm-missing',
+          fixes: [{ argv: ['npm', 'install', '-g', 'pnpm'], scope: 'user' }],
+        },
+      ],
+    });
   });
 
   it('exits 0 for a failed git init, with a warning and a created project', async () => {

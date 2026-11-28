@@ -3,7 +3,7 @@ import { basename } from 'node:path';
 import { EXAMPLES, type Options, parseArgv } from './args.js';
 import { gitIdentity } from './git.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
-import { exitCode, FAILURE, type Left, type Outcome, TOOLCHAIN } from './outcome.js';
+import { exitCode, FAILURE, type Left, type Outcome, type Problem, TOOLCHAIN } from './outcome.js';
 import { checkSwitch, detectPnpm, type Exec, ToolchainError, tooOld } from './pnpm.js';
 import { failureFrom, renderText, usageFailure } from './report.js';
 import { leftOf, leftoverLine, planFromOptions, type RunDeps, type RunPlan, run } from './run.js';
@@ -104,7 +104,19 @@ async function check(ui: Ui, exec: Exec | undefined): Promise<Outcome> {
   const spec = pnpmSpec();
   ui.intro();
   const pnpm = await detectPnpm(exec);
-  if (pnpm.kind === 'none') return { ok: true, kind: 'checked', pnpm, warnings: [] };
+  if (pnpm.kind === 'none') {
+    const pin = spec.slice('pnpm@'.length);
+    const warning: Problem = {
+      code: 'pnpm-missing',
+      title: "pnpm isn't installed",
+      lines: [
+        `Creating works: the install uses a temporary pnpm ${pin} (npm exec).`,
+        'Working in the project needs pnpm 10.26 or newer: https://pnpm.io/installation',
+      ],
+      fixes: [{ argv: ['npm', 'install', '-g', 'pnpm'], scope: 'user' }],
+    };
+    return { ok: true, kind: 'checked', pnpm, warnings: [warning] };
+  }
   if (pnpm.kind === 'old') return { ok: false, error: failureFrom(tooOld(pnpm.version, spec)) };
   try {
     await checkSwitch(spec, pnpm.version, exec);
@@ -177,7 +189,7 @@ export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome>
     plan ??= await askPlan(createAsk(io.prompts), cwd, options, now, holder);
     const result = await run(plan, ui, io.runDeps);
     const left: Left = { target: 'complete', ...(result.backup && { backup: result.backup }) };
-    return { ok: true, kind: 'created', plan, result, warnings: [], left };
+    return { ok: true, kind: 'created', plan, result, warnings: result.warnings, left };
   } catch (error) {
     const left = leftOf(error);
     const failure = failureFrom(error);

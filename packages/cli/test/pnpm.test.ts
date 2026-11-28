@@ -167,6 +167,30 @@ describe('switchFailure', () => {
       'Then run this command again. Nothing was created.',
     ]);
   });
+
+  it('gives the fix as one argument per word, a path with a space kept whole', () => {
+    const installer = '/Users/Ada Lovelace/pnpm/install.js';
+    const error = switchFailure('pnpm@12.15.0', '10.28.0', '', installer);
+    expect(error.details).toEqual({
+      fixes: [{ argv: ['node', installer], scope: 'user' }],
+      required: { pnpm: '12.15.0' },
+      found: { pnpm: '10.28.0' },
+    });
+    expect(error.lines).toContain(`Fix: node ${installer}`);
+  });
+
+  it('gives a page to read when there is no install script', () => {
+    const error = switchFailure('pnpm@12.15.0', '10.28.0', '');
+    expect(error.details.fixes).toEqual([{ see: PNPM_HELP, scope: 'user' }]);
+  });
+
+  it('removes credentials from the pnpm lines it quotes', () => {
+    const output = 'GET https://ada:hunter2@r.example/pnpm failed\n_authToken=abc123';
+    expect(switchFailure('pnpm@12.15.0', '10.28.0', output).lines.slice(0, 2)).toEqual([
+      'pnpm: GET https://ada:***@r.example/pnpm failed',
+      'pnpm: _authToken=***',
+    ]);
+  });
 });
 
 describe('installCommand', () => {

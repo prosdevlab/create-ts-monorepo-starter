@@ -74,8 +74,14 @@ describe('renderText', () => {
       `step: Ready: pnpm 10.28.0 switches to pnpm ${version} for this project`,
     ]);
     const none = recording();
-    renderText({ ok: true, kind: 'checked', pnpm: { kind: 'none' }, warnings: [] }, none.ui);
-    expect(none.calls[0]).toMatch(/^warn: pnpm isn't installed \| Creating works/);
+    const warning = {
+      code: 'pnpm-missing',
+      title: "pnpm isn't installed",
+      lines: ['a', 'b'],
+      fixes: [],
+    };
+    renderText({ ok: true, kind: 'checked', pnpm: { kind: 'none' }, warnings: [warning] }, none.ui);
+    expect(none.calls).toEqual(["warn: pnpm isn't installed | a | b"]);
   });
 
   it('closes a created project with the outro', () => {
