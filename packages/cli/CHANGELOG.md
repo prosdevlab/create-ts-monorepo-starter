@@ -1,5 +1,11 @@
 # create-ts-monorepo-starter
 
+## 0.3.0
+
+### Minor Changes
+
+- 741f616: A failed install now exits with 4 instead of 1, so a script can tell it from other failures. Retrying may work: nothing was created. The message is unchanged. Every other exit code stays the same.
+
 ## 0.2.1
 
 ### Patch Changes
