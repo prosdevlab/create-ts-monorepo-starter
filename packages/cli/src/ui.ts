@@ -2,6 +2,7 @@ import { isAbsolute, relative, sep } from 'node:path';
 import { styleText } from 'node:util';
 import * as p from '@clack/prompts';
 import { EXAMPLES, type Example } from './args.js';
+import type { ErrorCode } from './outcome.js';
 import type { RunPlan, RunResult } from './run.js';
 import { cliVersion, pnpmSpec, templateLabel } from './template.js';
 
@@ -223,6 +224,7 @@ export function clackUi(): Ui {
 /** Thrown when someone cancels a prompt (Ctrl-C or Escape). */
 export class CancelledError extends Error {
   override name = 'CancelledError';
+  readonly code: ErrorCode = 'cancelled';
 }
 
 function answer<T>(value: T): Exclude<T, symbol> {

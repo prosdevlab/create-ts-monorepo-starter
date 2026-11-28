@@ -1,3 +1,4 @@
+import { rmdirSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { EXAMPLES, type Example, type Options } from './args.js';
@@ -5,6 +6,7 @@ import { generate } from './generate.js';
 import { initAndCommit, insideGitRepo } from './git.js';
 import { assertLockfileSubset } from './lockfile.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
+import { CliError, coded, type ErrorCode, type Left, type Outcome } from './outcome.js';
 import {
   checkSwitch,
   defaultExec,
@@ -14,6 +16,7 @@ import {
   tooOld,
   type UsablePnpm,
 } from './pnpm.js';
+import { renderText } from './report.js';
 import { cliVersion, pnpmSpec, templateDir, templateLabel } from './template.js';
 import { CANCELLED, type Ui } from './ui.js';
 import {
@@ -23,12 +26,16 @@ import {
   type InterruptOutcome,
   moveIntoPlace,
   onInterrupt,
+  type Probe,
+  probePath,
   targetState,
   tempPath,
 } from './workspace.js';
 
 export interface RunPlan {
   target: string;
+  /** The folder as given. */
+  folder?: string;
   folderName: string;
   scope: string;
   keep: Example[];
@@ -59,18 +66,21 @@ export interface RunDeps {
   generate?: typeof generate;
   templateDir?: string;
   moveIntoPlace?: typeof moveIntoPlace;
+  backUp?: typeof backUp;
+  rm?: typeof rm;
   onInterrupt?: typeof onInterrupt;
   /** The folder the user's shell stands in; a backup never renames it. */
   cwd?: string;
+  /** A synchronous read of one path; `leftBehind` reads the disk through it. */
+  probe?: (path: string) => Probe;
+  /** Called with the interrupted outcome, after its message is printed and before the process exits. */
+  onOutcome?: (outcome: Outcome) => void;
 }
 
 /** A failure with the output lines that explain it. */
-export class RunError extends Error {
-  constructor(
-    message: string,
-    readonly lines: string[] = []
-  ) {
-    super(message);
+class RunError extends CliError {
+  constructor(code: ErrorCode, message: string, lines: string[] = []) {
+    super(code, message, lines);
     this.name = 'RunError';
   }
 }
@@ -96,6 +106,7 @@ export function planFromOptions(
   }
   return {
     target: resolve(cwd, o.folder),
+    folder: o.folder,
     folderName: packageNameFromFolder(o.folder, cwd),
     scope,
     keep: o.examples ?? [...EXAMPLES],
@@ -112,10 +123,15 @@ function lastLines(output: { stdout: string; stderr: string }): string[] {
 }
 
 type Phase =
-  | { at: 'working' | 'moved' }
-  | { at: 'backing-up'; inPlace: boolean }
+  | { at: 'working' }
+  | { at: 'moved'; backup?: string }
+  | { at: 'backing-up'; inPlace: boolean; backup?: string }
   | { at: 'backed-up'; backup: string }
   | { at: 'moving'; backup?: string };
+
+/** What a failure or a Ctrl-C says about a temporary folder it couldn't delete. */
+export const leftoverLine = (temp: string) =>
+  `Couldn't delete the temporary folder ${temp}: delete it yourself.`;
 
 /** The line a Ctrl-C prints: "nothing was written" holds only until the backup starts. */
 function cancelMessage(
@@ -126,16 +142,14 @@ function cancelMessage(
 ): [string, string[]] {
   const { target } = plan;
   const leftover = [
-    ...(outcome.removed
-      ? []
-      : [`Couldn't delete the temporary folder ${temp}: delete it yourself.`]),
+    ...(outcome.removed ? [] : [leftoverLine(temp)]),
     ...(outcome.stopped ? [] : ['pnpm may still be running in it.']),
   ];
   switch (phase.at) {
     case 'working':
       return outcome.removed ? [CANCELLED, leftover] : ['Cancelled.', leftover];
     case 'backing-up': {
-      const backup = basename(backupPath(target, plan.now));
+      const backup = basename(phase.backup ?? backupPath(target, plan.now));
       const where = phase.inPlace
         ? `Your files are in ${target}, in ${backup} beside it, or split between the two.`
         : `Your files are in ${target}, or in ${backup} beside it.`;
@@ -152,6 +166,57 @@ function cancelMessage(
     case 'moved':
       return [`Cancelled after the project was created in ${target}.`, leftover];
   }
+}
+
+type State = 'missing' | 'empty' | 'not-empty';
+
+/**
+ * What the run left behind, from the phase it was in and a synchronous read of the disk. Before
+ * `onPath` has fired the phase has no backup path, so no backup is claimed.
+ */
+export function leftBehind(
+  phase: Phase,
+  before: State | undefined,
+  read: (path: string) => Probe,
+  target: string
+): Left {
+  const unknown = (backup?: string): Left => {
+    const found = backup && read(backup) === 'not-empty' ? backup : undefined;
+    return { target: 'unknown', ...(found && { backup: found }) };
+  };
+  if (phase.at === 'working') {
+    if (before === undefined) return { target: 'unknown' };
+    return { target: before === 'not-empty' ? 'unchanged' : before };
+  }
+  if (phase.at === 'moved')
+    return { target: 'complete', ...(phase.backup && { backup: phase.backup }) };
+  const backup = phase.backup;
+  if (phase.at === 'backing-up' && !backup) return { target: 'unchanged' };
+  const now = read(target);
+  if (now === 'unreadable') return unknown(backup);
+  if (phase.at === 'moving') {
+    // backUp has returned, so the files are there unless the disk says the folder is gone or empty.
+    const kept = backup ? read(backup) : 'missing';
+    const where = backup && kept !== 'missing' && kept !== 'empty' ? { backup } : {};
+    if (now === 'missing' || now === 'empty') return { target: now, ...where };
+    if (before === undefined) return { target: 'unknown', ...where };
+    if (before === 'missing' || before === 'empty' || backup)
+      return { target: 'partial', ...where };
+    return { target: 'unchanged' };
+  }
+  const moved = read(backup as string);
+  if (moved === 'unreadable') return unknown(backup);
+  if (now === 'not-empty') {
+    return moved === 'not-empty' ? { target: 'split', backup } : { target: 'unchanged' };
+  }
+  return moved === 'not-empty' ? { target: now, backup } : unknown();
+}
+
+const recorded = new WeakMap<object, Left>();
+
+/** The `left` that `run()` recorded for an error it threw, if any. */
+export function leftOf(error: unknown): Left | undefined {
+  return typeof error === 'object' && error !== null ? recorded.get(error) : undefined;
 }
 
 const firstLine = (error: unknown) =>
@@ -174,6 +239,8 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
   const temp = tempPath(plan.target);
   // What a Ctrl-C has to report changes once the user's folder is moved aside or ours moves in.
   let phase: Phase = { at: 'working' };
+  let before: State | undefined;
+  const probe = deps.probe ?? probePath;
   const unregister = (deps.onInterrupt ?? onInterrupt)(temp, {
     onStart: () => {
       interrupted = true;
@@ -181,14 +248,39 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     exit: (code, outcome) => {
       try {
         ui.stop();
+        const facts = {
+          ...(outcome.removed ? {} : { temp }),
+          ...(outcome.stopped ? {} : { running: true as const }),
+        };
+        let left: Left;
+        try {
+          left = { ...leftBehind(phase, before, probe, plan.target), ...facts };
+        } catch {
+          left = { target: 'unknown', ...facts };
+        }
         const [title, lines] = cancelMessage(phase, plan, temp, outcome);
-        ui.fail(title, lines);
+        const interrupted: Outcome = {
+          ok: false,
+          error: { code: 'interrupted', title, lines, fixes: [] },
+          left,
+        };
+        renderText(interrupted, ui);
+        try {
+          deps.onOutcome?.(interrupted);
+        } catch {}
+        // Only an empty folder this run created: rmdir can't remove one with files in it.
+        try {
+          if (phase.at === 'backing-up' && phase.inPlace && phase.backup) {
+            if (probe(phase.backup) === 'empty') rmdirSync(phase.backup);
+          }
+        } catch {}
       } finally {
         process.exit(code);
       }
     },
   });
   try {
+    before = await targetState(plan.target).catch(() => undefined);
     // pnpm first: a pnpm that can't switch to the template's version stops the run before any file.
     const spec = pnpmSpec(await readFile(join(from, 'package.json'), 'utf8'));
     const pin = spec.slice('pnpm@'.length);
@@ -249,7 +341,11 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     }
     const seconds = Math.round((performance.now() - started) / 1000);
     if (output.code !== 0) {
-      throw new RunError(`Couldn't ${what} (pnpm exited with ${output.code})`, lastLines(output));
+      throw new RunError(
+        'install-failed',
+        `Couldn't ${what} (pnpm exited with ${output.code})`,
+        lastLines(output)
+      );
     }
     const installed = plan.install;
     ui.step(plan.install ? `Installed dependencies${using} (${seconds}s)` : 'Updated the lockfile');
@@ -283,20 +379,30 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
     let backup: string | undefined;
     if (plan.replace && (await targetState(plan.target)) === 'not-empty') {
       const cwd = deps.cwd ?? process.cwd();
-      phase = { at: 'backing-up', inPlace: await holdsCwd(plan.target, cwd) };
-      backup = await backUp(plan.target, plan.now, { cwd });
+      const inPlace = await holdsCwd(plan.target, cwd);
+      phase = { at: 'backing-up', inPlace, backup: undefined };
+      const onPath = (path: string) => {
+        phase = { at: 'backing-up', inPlace, backup: path };
+      };
+      try {
+        backup = await (deps.backUp ?? backUp)(plan.target, plan.now, { cwd, onPath });
+      } catch (error) {
+        throw coded('backup-failed', error);
+      }
       phase = { at: 'backed-up', backup };
       ui.step(`Moved the old ${name} to ${basename(backup)}`);
     }
     try {
       phase = { at: 'moving', ...(backup && { backup }) };
       await (deps.moveIntoPlace ?? moveIntoPlace)(temp, plan.target);
-      phase = { at: 'moved' };
+      phase = { at: 'moved', ...(backup && { backup }) };
     } catch (error) {
-      if (!backup) throw error;
-      throw new RunError(`Couldn't move the project into place: ${firstLine(error)}`, [
-        `The old files are in ${backup}.`,
-      ]);
+      if (!backup) throw coded('move-failed', error);
+      throw new RunError(
+        'move-failed',
+        `Couldn't move the project into place: ${firstLine(error)}`,
+        [`The old files are in ${backup}.`]
+      );
     }
     return {
       pnpm,
@@ -307,7 +413,23 @@ export async function run(plan: RunPlan, ui: Ui, deps: RunDeps = {}): Promise<Ru
       ...(backup && { backup }),
     };
   } catch (error) {
-    await rm(temp, { recursive: true, force: true });
+    let left: Left;
+    try {
+      left = leftBehind(phase, before, probe, plan.target);
+    } catch {
+      left = { target: 'unknown' };
+    }
+    try {
+      await (deps.rm ?? rm)(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch {
+      // The run's own error is the one to show; `left.temp` says what stayed behind.
+    }
+    try {
+      if (probe(temp) !== 'missing') left = { ...left, temp };
+    } catch {
+      left = { ...left, temp };
+    }
+    if (typeof error === 'object' && error !== null) recorded.set(error, left);
     throw error;
   } finally {
     unregister();

@@ -3,8 +3,10 @@ import { basename } from 'node:path';
 import { EXAMPLES, type Options, parseArgv } from './args.js';
 import { gitIdentity } from './git.js';
 import { defaultScope, NameError, normalizeScope, packageNameFromFolder } from './names.js';
+import { exitCode, FAILURE, type Left, type Outcome, TOOLCHAIN } from './outcome.js';
 import { checkSwitch, detectPnpm, type Exec, ToolchainError, tooOld } from './pnpm.js';
-import { planFromOptions, RunError, type RunPlan, run } from './run.js';
+import { failureFrom, renderText, usageFailure } from './report.js';
+import { leftOf, leftoverLine, planFromOptions, type RunDeps, type RunPlan, run } from './run.js';
 import { pnpmSpec } from './template.js';
 import {
   type Ask,
@@ -20,16 +22,7 @@ import {
 } from './ui.js';
 import { backupPath, targetState } from './workspace.js';
 
-const USAGE = 2;
-export const FAILURE = 1;
-/** The machine needs fixing first (pnpm can't switch versions, or is too old); nothing was created. */
-export const TOOLCHAIN = 3;
-const INTERRUPTED = 130;
-
-const usage = (message: string) => {
-  process.stderr.write(`${message}\n`);
-  return USAGE;
-};
+export { FAILURE, TOOLCHAIN };
 
 const nameProblem = (folder: string, cwd?: string) => {
   try {
@@ -93,26 +86,6 @@ async function askPlan(
   return { ...planFromOptions(answers, cwd, now, holder), replace };
 }
 
-function report(ui: Ui, error: unknown): number {
-  if (error instanceof CancelledError) {
-    ui.fail(CANCELLED, []);
-    return INTERRUPTED;
-  }
-  if (error instanceof ToolchainError) {
-    ui.fail(error.message, error.lines);
-    return TOOLCHAIN;
-  }
-  if (error instanceof RunError) {
-    ui.fail(error.message, error.lines);
-    return FAILURE;
-  }
-  const [title = 'Something went wrong', ...lines] = String(
-    error instanceof Error ? error.message : error
-  ).split('\n');
-  ui.fail(title, lines);
-  return FAILURE;
-}
-
 /** What a test can swap; each defaults to the real terminal and folder. */
 export interface MainIo {
   cwd?: string;
@@ -122,60 +95,50 @@ export interface MainIo {
   prompts?: Prompts;
   /** Runs commands for `--check`. */
   exec?: Exec;
+  /** Passed to `run`. */
+  runDeps?: RunDeps;
 }
 
 /** `--check`: is this machine's pnpm ready for the template's? Creates nothing. */
-async function check(ui: Ui, exec: Exec | undefined): Promise<number> {
+async function check(ui: Ui, exec: Exec | undefined): Promise<Outcome> {
   const spec = pnpmSpec();
-  const version = spec.slice('pnpm@'.length);
   ui.intro();
   const pnpm = await detectPnpm(exec);
-  if (pnpm.kind === 'none') {
-    ui.warn("pnpm isn't installed", [
-      `Creating works: the install uses a temporary pnpm ${version} (npm exec).`,
-      `Working in the project needs pnpm 10.26 or newer: https://pnpm.io/installation`,
-    ]);
-    return 0;
-  }
-  if (pnpm.kind === 'old') {
-    const error = tooOld(pnpm.version, spec);
-    ui.fail(error.message, error.lines);
-    return TOOLCHAIN;
-  }
+  if (pnpm.kind === 'none') return { ok: true, kind: 'checked', pnpm, warnings: [] };
+  if (pnpm.kind === 'old') return { ok: false, error: failureFrom(tooOld(pnpm.version, spec)) };
   try {
     await checkSwitch(spec, pnpm.version, exec);
   } catch (error) {
     if (!(error instanceof ToolchainError)) throw error;
-    ui.fail(error.message, error.lines);
-    return TOOLCHAIN;
+    return { ok: false, error: failureFrom(error) };
   }
-  ui.step(`Ready: pnpm ${pnpm.version} switches to pnpm ${version} for this project`);
-  return 0;
+  return { ok: true, kind: 'checked', pnpm, warnings: [] };
 }
 
-/** Runs the command and resolves with its exit code. */
-export async function main(argv: string[], io: MainIo = {}): Promise<number> {
+const isInteractive = (options: Options, io: MainIo) =>
+  !options.yes && (io.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY));
+
+/** The Ui a run shows: `--check` and pipes get plain text, a terminal gets the clack screens. */
+const chooseUi = (options: Options, io: MainIo): Ui =>
+  io.ui ?? (!options.check && isInteractive(options, io) ? clackUi() : plainUi());
+
+/**
+ * Runs the command and returns how it ended, without printing the result (progress goes to the Ui).
+ * `--help` and `--version` are `main`'s: they print text and aren't an outcome.
+ */
+export async function execute(argv: string[], io: MainIo = {}): Promise<Outcome> {
   const parsed = parseArgv(argv);
-  if (!parsed.ok) return usage(parsed.message);
+  if (!parsed.ok) return usageFailure(parsed.message);
   const { options } = parsed;
-  if (options.help) {
-    process.stdout.write(`${helpText()}\n`);
-    return 0;
-  }
-  if (options.version) {
-    process.stdout.write(`${versionText()}\n`);
-    return 0;
-  }
-  if (options.check) return check(io.ui ?? plainUi(), io.exec);
+  if (options.check) return check(chooseUi(options, io), io.exec);
   const cwd = io.cwd ?? process.cwd();
-  const interactive =
-    !options.yes && (io.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY));
+  const interactive = isInteractive(options, io);
   // A bad flag fails at once, before any question.
   if (interactive) {
     const problem =
       (options.folder !== undefined ? nameProblem(options.folder, cwd) : undefined) ??
       (options.scope !== undefined ? scopeProblem(options.scope) : undefined);
-    if (problem) return usage(problem);
+    if (problem) return usageFailure(problem);
   }
   const now = new Date();
   const holder = (await gitIdentity(cwd)).name;
@@ -183,33 +146,52 @@ export async function main(argv: string[], io: MainIo = {}): Promise<number> {
   let plan: RunPlan | undefined;
   if (!interactive) {
     if (options.folder === undefined) {
-      return usage('Pass a folder name, for example: create-ts-monorepo-starter my-tools');
+      return usageFailure('Pass a folder name, for example: create-ts-monorepo-starter my-tools');
     }
     try {
       plan = planFromOptions(options, cwd, now, holder);
     } catch (error) {
-      if (error instanceof NameError) return usage(error.message);
+      if (error instanceof NameError) return usageFailure(error.message);
       throw error;
     }
   }
 
-  const ui = io.ui ?? (interactive ? clackUi() : plainUi());
+  const ui = chooseUi(options, io);
   ui.intro();
   try {
     if (plan && (await targetState(plan.target)) === 'not-empty') {
       if (!options.force) {
-        const message = `${options.folder} isn't empty. Use another folder, or pass --force to move it aside.`;
-        ui.fail(message, []);
-        return FAILURE;
+        const title = `${options.folder} isn't empty. Use another folder, or pass --force to move it aside.`;
+        return { ok: false, error: { code: 'target-not-empty', title, lines: [], fixes: [] } };
       }
       plan.replace = true;
     }
     plan ??= await askPlan(createAsk(io.prompts), cwd, options, now, holder);
-    const result = await run(plan, ui);
-    ui.outro(result, plan);
-    return 0;
+    const result = await run(plan, ui, io.runDeps);
+    const left: Left = { target: 'complete', ...(result.backup && { backup: result.backup }) };
+    return { ok: true, kind: 'created', plan, result, warnings: [], left };
   } catch (error) {
-    if (error instanceof NameError) return usage(error.message);
-    return report(ui, error);
+    const left = leftOf(error);
+    const failure = failureFrom(error);
+    // The interrupt path says this too; a failure would otherwise leave the folder unmentioned.
+    if (left?.temp) failure.lines = [...failure.lines, leftoverLine(left.temp)];
+    return { ok: false, error: failure, ...(left && { left }) };
   }
+}
+
+/** Runs the command, prints how it ended, and resolves with its exit code. */
+export async function main(argv: string[], io: MainIo = {}): Promise<number> {
+  const parsed = parseArgv(argv);
+  if (parsed.ok && parsed.options.help) {
+    process.stdout.write(`${helpText()}\n`);
+    return 0;
+  }
+  if (parsed.ok && parsed.options.version) {
+    process.stdout.write(`${versionText()}\n`);
+    return 0;
+  }
+  const ui = parsed.ok ? chooseUi(parsed.options, io) : (io.ui ?? plainUi());
+  const outcome = await execute(argv, { ...io, ui });
+  renderText(outcome, ui);
+  return exitCode(outcome);
 }

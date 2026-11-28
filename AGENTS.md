@@ -39,15 +39,17 @@ packages/cli/
 In the order a run touches them:
 
 - `cli.ts`: the bin entry. Calls `main` and sets `process.exitCode`; it never calls `process.exit()`, so output flushes.
-- `main.ts`: parses the arguments, asks the questions when interactive, builds the plan, calls `run` and prints the
-  result. Exit codes: 0 done, 1 failure, 2 usage error, 3 toolchain (pnpm needs fixing, nothing created),
-  130 interrupted. `--check` runs only the pnpm check.
+- `main.ts`: `execute` parses the arguments, asks the questions when interactive, builds the plan, calls `run` and returns an
+  `Outcome`; `main` prints it and returns its exit code. Exit codes: 0 done, 1 failure, 2 usage error, 3 toolchain (pnpm needs fixing, nothing created),
+  4 install failed, 130 interrupted. `--check` runs only the pnpm check.
+- `outcome.ts`: the `Outcome` of a run, the error codes, `exitCode` (the one place exit codes are decided) and `codeOf`.
+- `report.ts`: `renderText` prints an `Outcome` as text; `failureFrom` turns an error into a failure.
 - `args.ts`: `parseArgv` (`node:util` `parseArgs`) into `Options`; the `lib`, `cli`, `web` example list.
 - `names.ts`: folder to package name, and scope normalization.
 - `ui.ts`: the prompts (`createAsk`, @clack/prompts), two outputs (clack for terminals; plain for pipes, CI and
   `NO_COLOR`), the help and version text.
 - `run.ts`: the orchestration: generate into a temporary folder, `git init`, install, lockfile check, first commit,
-  then move into place.
+  then move into place. `leftBehind` says what a failed or interrupted run left, from the phase and a read of the disk.
 - `template.ts`: where the bundled template is (`dist/template`), its version, the pnpm version from its
   `packageManager`, and the dotfile renames (`_gitignore`).
 - `generate.ts`: copies the template; removes unpicked examples and template-only files; applies markers; renames

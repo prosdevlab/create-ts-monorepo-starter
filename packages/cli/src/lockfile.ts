@@ -1,6 +1,9 @@
+import type { ErrorCode } from './outcome.js';
+
 /** Thrown when an install added lockfile entries the bundled lockfile lacks. */
 export class LockfileError extends Error {
   override name = 'LockfileError';
+  readonly code: ErrorCode = 'lockfile-changed';
 }
 
 const SECTIONS = ['packages', 'snapshots'] as const;
